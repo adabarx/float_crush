@@ -109,7 +109,7 @@ impl Plugin for FloatCrush {
             let mantissa = self.params.mantissa.value();
             
             for sample in channel_samples {
-                if *sample > 1. {
+                if *sample >= 1. {
                     *sample = 1.;
                     continue;
                 } else if *sample < -1. {
@@ -117,18 +117,34 @@ impl Plugin for FloatCrush {
                     continue;
                 }
 
-                for e in 0..exponent {
+                for e in (0..exponent).rev() {
                     let curr_fraction = 1_f32 / 2_f32.powi(e);
                     let curr_err = curr_fraction - sample.abs();
-                    if curr_err.is_sign_negative() {
-                        let mantissa_length = curr_fraction / mantissa as f32;
-                        for m in 0..mantissa {
-                            let curr_pos = curr_fraction + (mantissa_length * m as f32);
-                            let curr_err = curr_pos - sample.abs();
-                            if curr_err.is_sign_positive() {
-                                *sample = curr_pos * if sample.is_sign_negative() { -1. } else { 1. };
-                            }
+                    if curr_err.is_sign_positive() {
+                        if e >= exponent - 1 {
+                            *sample = 0.;
+                            break;
                         }
+
+                        let mantissa_length = curr_fraction / mantissa as f32;
+                        let mut prev_pos = curr_fraction;
+                        let mut prev_err = curr_err;
+                        for m in 0..mantissa {
+                            let curr_pos = curr_fraction - (mantissa_length * m as f32);
+                            let curr_err = curr_pos - sample.abs();
+                            if curr_err.is_sign_negative() {
+                                let polarity = if sample.is_sign_positive() { 1_f32 } else { -1_f32 };
+                                if curr_err.abs() < prev_err.abs() {
+                                    *sample = curr_pos * polarity;
+                                } else {
+                                    *sample = prev_pos * polarity;
+                                }
+                                break;
+                            }
+                            prev_pos = curr_pos;
+                            prev_err = curr_err;
+                        }
+                        break;
                     }
                 }
             }
