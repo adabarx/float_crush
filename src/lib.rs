@@ -109,6 +109,8 @@ impl Plugin for FloatCrush {
             let mantissa = self.params.mantissa.value();
             
             for sample in channel_samples {
+                let polarity = if sample.is_sign_positive() { 1_f32 } else { -1_f32 };
+
                 if *sample >= 1. {
                     *sample = 1.;
                     continue;
@@ -117,23 +119,20 @@ impl Plugin for FloatCrush {
                     continue;
                 }
 
-                for e in (0..exponent).rev() {
+                for e in (0..=exponent).rev() {
                     let curr_fraction = 1_f32 / 2_f32.powi(e);
                     let curr_err = curr_fraction - sample.abs();
                     if curr_err.is_sign_positive() {
-                        if e >= exponent - 1 {
-                            *sample = 0.;
-                            break;
-                        }
-
+                        // current fraction is below the sample
+                        // start looking upward
                         let mantissa_length = curr_fraction / mantissa as f32;
                         let mut prev_pos = curr_fraction;
                         let mut prev_err = curr_err;
-                        for m in 0..mantissa {
+                        for m in 0..=mantissa {
                             let curr_pos = curr_fraction - (mantissa_length * m as f32);
                             let curr_err = curr_pos - sample.abs();
                             if curr_err.is_sign_negative() {
-                                let polarity = if sample.is_sign_positive() { 1_f32 } else { -1_f32 };
+                                // we've found it
                                 if curr_err.abs() < prev_err.abs() {
                                     *sample = curr_pos * polarity;
                                 } else {
@@ -145,6 +144,12 @@ impl Plugin for FloatCrush {
                             prev_err = curr_err;
                         }
                         break;
+                    } else if e == exponent {
+                        if sample.abs() > curr_err.abs() / 2. {
+                            *sample = curr_fraction * polarity;
+                        } else {
+                            *sample = 0.;
+                        }
                     }
                 }
             }
