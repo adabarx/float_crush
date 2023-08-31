@@ -109,9 +109,10 @@ impl Plugin for FloatCrush {
             let exponent = self.params.exponent.value();
             let mantissa = self.params.mantissa.value();
             
-            for sample in channel_samples {
+            for sample in channel_samples {;
                 let polarity = if sample.is_sign_positive() { 1_f32 } else { -1_f32 };
                 let s_abs = sample.abs();
+                let s_before = sample.clone();
 
                 if s_abs >= 1. {
                     *sample = 1. * polarity;
@@ -145,14 +146,33 @@ impl Plugin for FloatCrush {
                         *sample = curr_frac * polarity;
                         break 'search_loop;
                     } else if e == exponent {
-                        let threshold = curr_frac / 2.;
-                        if s_abs > threshold {
-                            *sample = curr_frac;
-                        } else {
-                            *sample = 0.;
+                        // just gonna shamelessly copy this logic
+                        let m_step = curr_frac / mantissa as f32;
+                        let mut prev_step = curr_frac;
+                        let mut prev_err = curr_err;
+
+                        for m in 0..mantissa {
+                            let curr_step = curr_frac - (m_step * m as f32);
+                            let curr_err  = curr_step - s_abs;
+                            if curr_err.is_sign_negative() {
+                                if curr_err.abs() < prev_err.abs() {
+                                    *sample = curr_step * polarity;
+                                } else {
+                                    *sample = prev_step * polarity;
+                                }
+                                break 'search_loop;
+                            } else if m == mantissa {
+                                *sample = 0.;
+                                break 'search_loop;
+                            }
+                            prev_step = curr_step;
+                            prev_err = curr_err;
                         }
                         break 'search_loop;
                     }
+                }
+                if *sample == s_before && s_before < 1. {
+                    *sample = 0.;
                 }
             }
         }
