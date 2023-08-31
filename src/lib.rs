@@ -123,21 +123,34 @@ impl Plugin for FloatCrush {
                     let curr_err  = curr_frac - s_abs;
                     if curr_err.is_sign_negative() {
                         let m_step = curr_frac / mantissa as f32;
+                        let mut prev_step = curr_frac;
+                        let mut prev_err = curr_err;
                         for m in 0..=mantissa {
                             let curr_step = curr_frac + (m_step * m as f32);
-                            let step_err  = curr_step - s_abs;
-                            if step_err.is_sign_positive() {
-                                *sample = curr_step * polarity;
+                            let curr_err  = curr_step - s_abs;
+                            if curr_err.is_sign_positive() {
+                                if curr_err.abs() < prev_err.abs() {
+                                    *sample = curr_step * polarity;
+                                } else {
+                                    *sample = prev_step * polarity;
+                                }
                                 break 'search_loop;
                             } else if m == mantissa {
                                 *sample = curr_step * polarity;
                                 break 'search_loop;
                             }
+                            prev_step = curr_step;
+                            prev_err = curr_err;
                         }
                         *sample = curr_frac * polarity;
                         break 'search_loop;
                     } else if e == exponent {
-                        *sample = 0.;
+                        let threshold = curr_frac / 2.;
+                        if s_abs > threshold {
+                            *sample = curr_frac;
+                        } else {
+                            *sample = 0.;
+                        }
                         break 'search_loop;
                     }
                 }
