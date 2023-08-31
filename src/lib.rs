@@ -118,15 +118,27 @@ impl Plugin for FloatCrush {
                     continue;
                 }
 
-                for e in 0..=exponent {
+                'search_loop: for e in 0..=exponent {
                     let curr_frac = 1_f32 / 2_f32.powi(e);
                     let curr_err  = curr_frac - s_abs;
                     if curr_err.is_sign_negative() {
+                        let m_step = curr_frac / mantissa as f32;
+                        for m in 0..=mantissa {
+                            let curr_step = curr_frac + (m_step * m as f32);
+                            let step_err  = curr_step - s_abs;
+                            if step_err.is_sign_positive() {
+                                *sample = curr_step * polarity;
+                                break 'search_loop;
+                            } else if m == mantissa {
+                                *sample = curr_step * polarity;
+                                break 'search_loop;
+                            }
+                        }
                         *sample = curr_frac * polarity;
-                        break;
+                        break 'search_loop;
                     } else if e == exponent {
                         *sample = 0.;
-                        break;
+                        break 'search_loop;
                     }
                 }
             }
