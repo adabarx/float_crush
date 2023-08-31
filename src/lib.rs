@@ -1,3 +1,4 @@
+#![allow(unused_variables)]
 use nih_plug::prelude::*;
 use std::sync::Arc;
 
@@ -110,46 +111,22 @@ impl Plugin for FloatCrush {
             
             for sample in channel_samples {
                 let polarity = if sample.is_sign_positive() { 1_f32 } else { -1_f32 };
+                let s_abs = sample.abs();
 
-                if *sample >= 1. {
-                    *sample = 1.;
-                    continue;
-                } else if *sample < -1. {
-                    *sample = -1.;
+                if s_abs >= 1. {
+                    *sample = 1. * polarity;
                     continue;
                 }
 
-                for e in (0..=exponent).rev() {
-                    let curr_fraction = 1_f32 / 2_f32.powi(e);
-                    let curr_err = curr_fraction - sample.abs();
-                    if curr_err.is_sign_positive() {
-                        // current fraction is below the sample
-                        // start looking upward
-                        let mantissa_length = curr_fraction / mantissa as f32;
-                        let mut prev_pos = curr_fraction;
-                        let mut prev_err = curr_err;
-                        for m in 0..=mantissa {
-                            let curr_pos = curr_fraction - (mantissa_length * m as f32);
-                            let curr_err = curr_pos - sample.abs();
-                            if curr_err.is_sign_negative() {
-                                // we've found it
-                                if curr_err.abs() < prev_err.abs() {
-                                    *sample = curr_pos * polarity;
-                                } else {
-                                    *sample = prev_pos * polarity;
-                                }
-                                break;
-                            }
-                            prev_pos = curr_pos;
-                            prev_err = curr_err;
-                        }
+                for e in 0..=exponent {
+                    let curr_frac = 1_f32 / 2_f32.powi(e);
+                    let curr_err  = curr_frac - s_abs;
+                    if curr_err.is_sign_negative() {
+                        *sample = curr_frac * polarity;
                         break;
                     } else if e == exponent {
-                        if sample.abs() > curr_err.abs() / 2. {
-                            *sample = curr_fraction * polarity;
-                        } else {
-                            *sample = 0.;
-                        }
+                        *sample = 0.;
+                        break;
                     }
                 }
             }
