@@ -163,11 +163,12 @@ impl Plugin for FloatCrush {
             let drive = self.params.drive.value();
             
             for sample in channel_samples {
+                let polarity = if sample.is_sign_positive() { 1_f32 } else { -1_f32 };
+                let s_dry = sample.clone();
+
                 // apply input drive
                 *sample *= drive;
 
-                let polarity = if sample.is_sign_positive() { 1_f32 } else { -1_f32 };
-                let s_dry = sample.clone();
                 let s_abs = sample.abs();
                 let mut s_wet = sample.clone();
 
