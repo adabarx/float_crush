@@ -16,11 +16,20 @@ struct FloatCrushParams {
     /// these IDs remain constant, you can rename and reorder these fields as you wish. The
     /// parameters are exposed to the host in the same order they were defined. In this case, this
     /// gain parameter is stored as linear gain while the values are displayed in decibels.
+    #[id = "drive"]
+    pub drive: FloatParam,
+
     #[id = "exponent"]
     pub exponent: IntParam,
 
     #[id = "mantissa"]
     pub mantissa: IntParam,
+
+    #[id = "dry"]
+    pub dry: FloatParam,
+
+    #[id = "wet"]
+    pub wet: FloatParam,
 }
 
 impl Default for FloatCrush {
@@ -34,8 +43,49 @@ impl Default for FloatCrush {
 impl Default for FloatCrushParams {
     fn default() -> Self {
         Self {
-            exponent: IntParam::new("exponent", 8, IntRange::Linear { min: 1, max: 8 }),
-            mantissa: IntParam::new("mantissa", 8, IntRange::Linear { min: 1, max: 8 }),
+            drive: FloatParam::new(
+                "drive",
+                1.,
+                FloatRange::Skewed {
+                    min: util::db_to_gain(-12.),
+                    max: util::db_to_gain(36.),
+                    factor: FloatRange::gain_skew_factor(-12., 36.)
+                }
+            )
+            .with_unit(" db")
+            .with_value_to_string(formatters::v2s_f32_gain_to_db(1))
+            .with_string_to_value(formatters::s2v_f32_gain_to_db()),
+            
+            exponent: IntParam::new(
+                "exponent",
+                8,
+                IntRange::Linear { min: 1, max: 8 }
+            ),
+
+            mantissa: IntParam::new(
+                "mantissa",
+                12,
+                IntRange::Linear { min: 1, max: 12 }
+            ),
+
+            dry: FloatParam::new("dry", 0., FloatRange::Skewed {
+                min: 0.,
+                max: 1.,
+                factor: FloatRange::gain_skew_factor(1e-5, 0.)
+            })
+            .with_unit(" db")
+            .with_value_to_string(formatters::v2s_f32_gain_to_db(1))
+            .with_string_to_value(formatters::s2v_f32_gain_to_db()),
+
+            wet: FloatParam::new("wet", 1., FloatRange::Skewed {
+                min: 0.,
+                max: 1., 
+                factor: FloatRange::gain_skew_factor(1e-5, 0.)
+            })
+            .with_unit(" db")
+            .with_value_to_string(formatters::v2s_f32_gain_to_db(1))
+            .with_string_to_value(formatters::s2v_f32_gain_to_db()),
+
         }
     }
 }
@@ -108,14 +158,22 @@ impl Plugin for FloatCrush {
         for channel_samples in buffer.iter_samples() {
             let exponent = self.params.exponent.value();
             let mantissa = self.params.mantissa.value();
+            let dry_gain = self.params.dry.value();
+            let wet_gain = self.params.wet.value();
+            let drive = self.params.drive.value();
             
-            for sample in channel_samples {;
+            for sample in channel_samples {
+                // apply input drive
+                *sample *= drive;
+
                 let polarity = if sample.is_sign_positive() { 1_f32 } else { -1_f32 };
+                let s_dry = sample.clone();
                 let s_abs = sample.abs();
-                let s_before = sample.clone();
+                let mut s_wet = sample.clone();
 
                 if s_abs >= 1. {
-                    *sample = 1. * polarity;
+                    let clipped = 1. * polarity;
+                    *sample = (s_dry * dry_gain) + (clipped * wet_gain);
                     continue;
                 }
 
@@ -131,19 +189,19 @@ impl Plugin for FloatCrush {
                             let curr_err  = curr_step - s_abs;
                             if curr_err.is_sign_positive() {
                                 if curr_err.abs() < prev_err.abs() {
-                                    *sample = curr_step * polarity;
+                                    s_wet = curr_step * polarity;
                                 } else {
-                                    *sample = prev_step * polarity;
+                                    s_wet = prev_step * polarity;
                                 }
                                 break 'search_loop;
                             } else if m == mantissa {
-                                *sample = curr_step * polarity;
+                                s_wet = curr_step * polarity;
                                 break 'search_loop;
                             }
                             prev_step = curr_step;
                             prev_err = curr_err;
                         }
-                        *sample = curr_frac * polarity;
+                        s_wet = curr_frac * polarity;
                         break 'search_loop;
                     } else if e == exponent {
                         // just gonna shamelessly copy this logic
@@ -156,13 +214,13 @@ impl Plugin for FloatCrush {
                             let curr_err  = curr_step - s_abs;
                             if curr_err.is_sign_negative() {
                                 if curr_err.abs() < prev_err.abs() {
-                                    *sample = curr_step * polarity;
+                                    s_wet = curr_step * polarity;
                                 } else {
-                                    *sample = prev_step * polarity;
+                                    s_wet = prev_step * polarity;
                                 }
                                 break 'search_loop;
                             } else if m == mantissa {
-                                *sample = 0.;
+                                s_wet = 0.;
                                 break 'search_loop;
                             }
                             prev_step = curr_step;
@@ -171,9 +229,11 @@ impl Plugin for FloatCrush {
                         break 'search_loop;
                     }
                 }
-                if *sample == s_before && s_before < 1. {
-                    *sample = 0.;
+                if s_wet == s_dry && s_dry < 1. {
+                    s_wet = 0.;
                 }
+
+                *sample = (s_dry * dry_gain) + (s_wet * wet_gain)
             }
         }
 
