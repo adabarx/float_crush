@@ -23,7 +23,7 @@ struct FloatCrushParams {
     pub exponent: IntParam,
 
     #[id = "mantissa"]
-    pub mantissa: IntParam,
+    pub mantissa: FloatParam,
 
     #[id = "dry"]
     pub dry: FloatParam,
@@ -59,14 +59,16 @@ impl Default for FloatCrushParams {
             exponent: IntParam::new(
                 "exponent",
                 8,
-                IntRange::Linear { min: 1, max: 8 }
-            ),
+                IntRange::Linear { min: 0, max: 8 }
+            )
+            .with_unit(" bits"),
 
-            mantissa: IntParam::new(
+            mantissa: FloatParam::new(
                 "mantissa",
-                12,
-                IntRange::Linear { min: 1, max: 12 }
-            ),
+                8.,
+                FloatRange::Linear { min: 0., max: 8. }
+            )
+            .with_unit(" bits"),
 
             dry: FloatParam::new("dry", 0., FloatRange::Skewed {
                 min: 0.,
@@ -157,7 +159,7 @@ impl Plugin for FloatCrush {
     ) -> ProcessStatus {
         for channel_samples in buffer.iter_samples() {
             let exponent = self.params.exponent.value();
-            let mantissa = self.params.mantissa.value();
+            let mantissa = 2_f32.powf(self.params.mantissa.value()).round() as u32;
             let dry_gain = self.params.dry.value();
             let wet_gain = self.params.wet.value();
             let drive = self.params.drive.value();
@@ -205,6 +207,7 @@ impl Plugin for FloatCrush {
                         s_wet = curr_frac * polarity;
                         break 'search_loop;
                     } else if e == exponent {
+                        s_wet = 0.;
                         // just gonna shamelessly copy this logic
                         let m_step = curr_frac / mantissa as f32;
                         let mut prev_step = curr_frac;
@@ -229,9 +232,6 @@ impl Plugin for FloatCrush {
                         }
                         break 'search_loop;
                     }
-                }
-                if s_wet == s_dry && s_dry < 1. {
-                    s_wet = 0.;
                 }
 
                 *sample = (s_dry * dry_gain) + (s_wet * wet_gain)
