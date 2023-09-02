@@ -28,6 +28,9 @@ struct FloatCrushParams {
     #[id = "mantissa"]
     pub mantissa: FloatParam,
 
+    #[id = "mantissa_bias"]
+    pub mantissa_bias: FloatParam,
+
     #[id = "dry"]
     pub dry: FloatParam,
 
@@ -78,6 +81,13 @@ impl Default for FloatCrushParams {
                 FloatRange::Linear { min: 0., max: 8. }
             )
             .with_unit(" bits"),
+
+            mantissa_bias: FloatParam::new(
+                "mantissa_bias",
+                0.,
+                FloatRange::Linear { min: -1., max: 1. }
+            )
+            .with_value_to_string(formatters::v2s_f32_rounded(1)),
 
             dry: FloatParam::new("dry", 0., FloatRange::Skewed {
                 min: 0.,
@@ -169,10 +179,14 @@ impl Plugin for FloatCrush {
         for channel_samples in buffer.iter_samples() {
             let exponent = self.params.exponent.value();
             let exponent_bias = self.params.exponent_bias.value();
-            let mantissa = 2_f32.powf(self.params.mantissa.value()).round() as u32;
+
+            let mantissa = 2_f32.powf(self.params.mantissa.value()).round() as i32;
+            let mantissa_bias = 100_f32.powf(self.params.mantissa_bias.value());
+            let mantissa_bias_invert = 100_f32.powf(self.params.mantissa_bias.value() * -1.);
+
+            let drive = self.params.drive.value();
             let dry_gain = self.params.dry.value();
             let wet_gain = self.params.wet.value();
-            let drive = self.params.drive.value();
             
             for sample in channel_samples {
                 let polarity = if sample.is_sign_positive() { 1_f32 } else { -1_f32 };
@@ -194,11 +208,21 @@ impl Plugin for FloatCrush {
                     let curr_frac = 1_f32 / (exponent_bias * 2.).powi(e);
                     let curr_err  = curr_frac - s_abs;
                     if curr_err.is_sign_negative() {
-                        let m_step = curr_frac / mantissa as f32;
                         let mut prev_step = curr_frac;
                         let mut prev_err = curr_err;
                         for m in 0..=mantissa {
-                            let curr_step = curr_frac + (m_step * m as f32);
+
+                            let curr_step = curr_frac + if m == 0 {
+                                0.
+                            } else if mantissa_bias == 1. {
+                                let m_step = curr_frac / mantissa as f32;
+                                m_step * m as f32
+                            } else {
+                                // normalize mantissa to 0.0 - 1.0
+                                let m = m as f32 / mantissa as f32;
+                                (mantissa_bias.powf(m) - 1.) / (mantissa_bias - 1.)
+                            };
+
                             let curr_err  = curr_step - s_abs;
                             if curr_err.is_sign_positive() {
                                 if curr_err.abs() < prev_err.abs() {
@@ -224,7 +248,17 @@ impl Plugin for FloatCrush {
                         let mut prev_err = curr_err;
 
                         for m in 0..mantissa {
-                            let curr_step = curr_frac - (m_step * m as f32);
+                            let curr_step = curr_frac - if m == 0 {
+                                0.
+                            } else if mantissa_bias == 1. {
+                                let m_step = curr_frac / mantissa as f32;
+                                m_step * m as f32
+                            } else {
+                                // normalize mantissa to 0.0 - 1.0
+                                let m = m as f32 / mantissa as f32;
+                                (mantissa_bias_invert.powf(m) - 1.) / (mantissa_bias_invert - 1.)
+                            };
+
                             let curr_err  = curr_step - s_abs;
                             if curr_err.is_sign_negative() {
                                 if curr_err.abs() < prev_err.abs() {
