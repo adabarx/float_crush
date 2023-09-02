@@ -22,6 +22,9 @@ struct FloatCrushParams {
     #[id = "exponent"]
     pub exponent: IntParam,
 
+    #[id = "exponent_bias"]
+    pub exponent_bias: FloatParam,
+
     #[id = "mantissa"]
     pub mantissa: FloatParam,
 
@@ -62,6 +65,12 @@ impl Default for FloatCrushParams {
                 IntRange::Linear { min: 0, max: 8 }
             )
             .with_unit(" bits"),
+            
+            exponent_bias: FloatParam::new(
+                "exponent_bias",
+                1.,
+                FloatRange::Linear { min: 0.5, max: 2. }
+            ),
 
             mantissa: FloatParam::new(
                 "mantissa",
@@ -159,6 +168,7 @@ impl Plugin for FloatCrush {
     ) -> ProcessStatus {
         for channel_samples in buffer.iter_samples() {
             let exponent = self.params.exponent.value();
+            let exponent_bias = self.params.exponent_bias.value();
             let mantissa = 2_f32.powf(self.params.mantissa.value()).round() as u32;
             let dry_gain = self.params.dry.value();
             let wet_gain = self.params.wet.value();
@@ -181,7 +191,7 @@ impl Plugin for FloatCrush {
                 }
 
                 'search_loop: for e in 0..=exponent {
-                    let curr_frac = 1_f32 / 2_f32.powi(e);
+                    let curr_frac = 1_f32 / (exponent_bias * 2.).powi(e);
                     let curr_err  = curr_frac - s_abs;
                     if curr_err.is_sign_negative() {
                         let m_step = curr_frac / mantissa as f32;
