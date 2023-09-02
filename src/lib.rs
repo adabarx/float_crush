@@ -87,7 +87,7 @@ impl Default for FloatCrushParams {
                 0.,
                 FloatRange::Linear { min: -1., max: 1. }
             )
-            .with_value_to_string(formatters::v2s_f32_rounded(1)),
+            .with_value_to_string(formatters::v2s_f32_rounded(2)),
 
             dry: FloatParam::new("dry", 0., FloatRange::Skewed {
                 min: 0.,
@@ -181,7 +181,7 @@ impl Plugin for FloatCrush {
             let exponent_bias = self.params.exponent_bias.value();
 
             let mantissa = 2_f32.powf(self.params.mantissa.value()).round() as i32;
-            let mantissa_bias = 100_f32.powf(self.params.mantissa_bias.value());
+            let mantissa_bias = 1000_f32.powf(self.params.mantissa_bias.value());
             let mantissa_bias_invert = 100_f32.powf(self.params.mantissa_bias.value() * -1.);
 
             let drive = self.params.drive.value();
@@ -220,7 +220,8 @@ impl Plugin for FloatCrush {
                             } else {
                                 // normalize mantissa to 0.0 - 1.0
                                 let m = m as f32 / mantissa as f32;
-                                (mantissa_bias.powf(m) - 1.) / (mantissa_bias - 1.)
+                                let position = (mantissa_bias_invert.powf(m) - 1.) / (mantissa_bias_invert - 1.);
+                                position * curr_frac
                             };
 
                             let curr_err  = curr_step - s_abs;
@@ -256,7 +257,8 @@ impl Plugin for FloatCrush {
                             } else {
                                 // normalize mantissa to 0.0 - 1.0
                                 let m = m as f32 / mantissa as f32;
-                                (mantissa_bias_invert.powf(m) - 1.) / (mantissa_bias_invert - 1.)
+                                let position = (mantissa_bias.powf(m) - 1.) / (mantissa_bias - 1.);
+                                position * curr_frac
                             };
 
                             let curr_err  = curr_step - s_abs;
