@@ -72,7 +72,7 @@ impl Default for FloatCrushParams {
             exponent_bias: FloatParam::new(
                 "exponent_bias",
                 1.,
-                FloatRange::Linear { min: 0.5, max: 2. }
+                FloatRange::Skewed { min: 0.5, max: 2., factor: 0.625 }
             ),
 
             mantissa: FloatParam::new(
@@ -181,8 +181,8 @@ impl Plugin for FloatCrush {
             let exponent_bias = self.params.exponent_bias.value();
 
             let mantissa = 2_f32.powf(self.params.mantissa.value()).round() as i32;
-            let mantissa_bias = 1000_f32.powf(self.params.mantissa_bias.value());
-            let mantissa_bias_invert = 100_f32.powf(self.params.mantissa_bias.value() * -1.);
+            let mantissa_bias = 50000_f32.powf(self.params.mantissa_bias.value());
+            let mantissa_bias_invert = 50000_f32.powf(self.params.mantissa_bias.value() * -1.);
 
             let drive = self.params.drive.value();
             let dry_gain = self.params.dry.value();
