@@ -20,7 +20,7 @@ struct FloatCrushParams {
     pub drive: FloatParam,
 
     #[id = "exponent"]
-    pub exponent: IntParam,
+    pub exponent: FloatParam,
 
     #[id = "exponent_bias"]
     pub exponent_bias: FloatParam,
@@ -62,12 +62,13 @@ impl Default for FloatCrushParams {
             .with_value_to_string(formatters::v2s_f32_gain_to_db(1))
             .with_string_to_value(formatters::s2v_f32_gain_to_db()),
             
-            exponent: IntParam::new(
+            exponent: FloatParam::new(
                 "exponent",
-                8,
-                IntRange::Linear { min: 0, max: 8 }
+                8.,
+                FloatRange::Skewed { min: 0., max: 8., factor: 1.5 }
             )
-            .with_unit(" bits"),
+            .with_unit(" bits")
+            .with_value_to_string(formatters::v2s_f32_rounded(1)),
             
             exponent_bias: FloatParam::new(
                 "exponent_bias",
@@ -77,10 +78,11 @@ impl Default for FloatCrushParams {
 
             mantissa: FloatParam::new(
                 "mantissa",
-                8.,
-                FloatRange::Linear { min: 0., max: 8. }
+                12.,
+                FloatRange::Skewed { min: 0., max: 12., factor: 1.25 }
             )
-            .with_unit(" bits"),
+            .with_unit(" bits")
+            .with_value_to_string(formatters::v2s_f32_rounded(1)),
 
             mantissa_bias: FloatParam::new(
                 "mantissa_bias",
@@ -177,7 +179,7 @@ impl Plugin for FloatCrush {
         _context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         for channel_samples in buffer.iter_samples() {
-            let exponent = self.params.exponent.value();
+            let exponent = 2_f32.powf(self.params.exponent.value()).round() as i32;
             let exponent_bias = self.params.exponent_bias.value();
 
             let mantissa = 2_f32.powf(self.params.mantissa.value()).round() as i32;
