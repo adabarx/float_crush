@@ -378,7 +378,7 @@ fn search_and_quantize(
                 position.error = other_err;
             }
         }
-    } else if mantissa < 1 {
+    } else {
         if e_bias > std::f32::consts::SQRT_2 {
             // linear search will be faster
             loop {
@@ -389,7 +389,12 @@ fn search_and_quantize(
                 if other_sample == sample_abs { break sample; }
 
                 if other_err.is_sign_negative() {
-                    break quantizer.quantize(position.sample, other_sample, sample) * polarity;
+                    if mantissa == 0 {
+                        break quantizer.quantize(position.sample, other_sample, sample) * polarity;
+                    }
+                    let step_size = position.range / mantissa as f32;
+
+
                 }
 
                 position.index = other_index;
@@ -417,8 +422,6 @@ fn search_and_quantize(
                 position.error = other_err;
             }
         }
-    } else {
-        todo!("combo exponent and mantissa search")
     }
 }
 
