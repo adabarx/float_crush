@@ -19,6 +19,9 @@ struct FloatCrushParams {
     #[id = "drive"]
     pub drive: FloatParam,
 
+    #[id = "round"]
+    pub round: IntParam,
+
     #[id = "exponent"]
     pub exponent: FloatParam,
 
@@ -61,6 +64,8 @@ impl Default for FloatCrushParams {
             .with_unit(" db")
             .with_value_to_string(formatters::v2s_f32_gain_to_db(1))
             .with_string_to_value(formatters::s2v_f32_gain_to_db()),
+
+            round: IntParam::new("round", 0, IntRange::Linear { min: -1, max: 1 }),
             
             exponent: FloatParam::new(
                 "exponent",
@@ -207,13 +212,13 @@ impl Plugin for FloatCrush {
                     continue;
                 }
 
-                'search_loop: for e in 0..=exponent {
+                'search_loop: for e in 0..exponent {
                     let curr_frac = 1_f32 / (exponent_bias * 2.).powi(e);
                     let curr_err  = curr_frac - s_abs;
                     if curr_err.is_sign_negative() {
                         let mut prev_step = curr_frac;
                         let mut prev_err = curr_err;
-                        for m in 0..=mantissa {
+                        for m in 0..mantissa {
 
                             let curr_step = curr_frac + if m == 0 {
                                 0.
@@ -228,7 +233,7 @@ impl Plugin for FloatCrush {
                                 position * curr_frac
                             };
 
-                            let curr_err  = curr_step - s_abs;
+                            let curr_err = curr_step - s_abs;
                             if curr_err.is_sign_positive() {
                                 if curr_err.abs() < prev_err.abs() {
                                     s_wet = curr_step * polarity;
@@ -284,11 +289,136 @@ impl Plugin for FloatCrush {
                     }
                 }
 
+                let _ = search_and_quantize(*sample, exponent, exponent_bias, mantissa, mantissa_bias, 0);
                 *sample = (s_dry * dry_gain) + (s_wet * wet_gain)
             }
         }
 
         ProcessStatus::Normal
+    }
+}
+
+ enum Quantizator {
+    RoundUp,
+    Nearest,
+    RoundDown,
+}
+
+impl Quantizator {
+    pub fn from_i32(int: i32) -> Self {
+        if int == 0 {
+            Self::Nearest
+        } else if int > 0 {
+            Self::RoundUp
+        } else {
+            Self::RoundDown
+        }
+    }
+
+    pub fn quantize(&self, upper_bound: f32, lower_bound: f32, sample: f32) -> f32 {
+        match self {
+            Self::Nearest => {
+                let midpoint = (upper_bound + lower_bound) / 2.;
+
+                if sample > midpoint { upper_bound }
+                else { lower_bound }
+            },
+            Self::RoundUp => upper_bound,
+            Self::RoundDown => lower_bound,
+        }
+    }
+}
+
+struct Position {
+    sample: f32,
+    index: i32,
+    range: f32,
+    error: f32,
+}
+
+fn search_and_quantize(
+    sample: f32,
+    exponent: i32,
+    e_bias: f32,
+    mantissa: i32,
+    m_bias: f32,
+    round_type: i32
+) -> f32 {
+    let polarity = if sample.is_sign_positive() { 1_f32 } else { -1_f32 };
+    let sample_abs = sample.abs();
+    let quantizer = Quantizator::from_i32(round_type);
+
+    if sample >= 1. {
+        return polarity;
+    }
+
+    if exponent < 1 && mantissa < 1 {
+        return quantizer.quantize(1., 0., sample);
+    }
+
+    let mut position = Position { sample: 1., index: 0, range: 0.5, error: 1. - sample_abs };
+    if exponent < 1 {
+        let step_size = 1. / mantissa as f32;
+        loop {
+            let other_index = mantissa * position.range as i32;
+            let other_sample = step_size * other_index as f32;
+            let other_err = other_sample - sample_abs;
+
+            if other_sample == sample_abs { break sample; }
+
+            if position.index - other_index <= 1 {
+                break quantizer.quantize(position.sample, other_sample, sample_abs) * polarity;
+            }
+
+            if other_err.is_sign_negative() {
+                position.range *= 0.5;
+            } else {
+                position.index = other_index;
+                position.sample = other_sample;
+                position.error = other_err;
+            }
+        }
+    } else if mantissa < 1 {
+        if e_bias > std::f32::consts::SQRT_2 {
+            // linear search will be faster
+            loop {
+                let other_index = position.index + 1;
+                let other_sample = 1. / (e_bias * 2.).powi(other_index);
+                let other_err = other_sample - sample_abs;
+
+                if other_sample == sample_abs { break sample; }
+
+                if other_err.is_sign_negative() {
+                    break quantizer.quantize(position.sample, other_sample, sample) * polarity;
+                }
+
+                position.index = other_index;
+                position.sample = other_sample;
+                position.error = other_err;
+            }
+        } else {
+            loop {
+                let other_index = position.index * position.range as i32;
+                let other_sample = 1. / (e_bias * 2.).powi(other_index);
+                let other_err = other_sample - sample_abs;
+
+                if other_sample == sample_abs { break sample; }
+
+                if position.index - other_index <= 1 {
+                    break quantizer.quantize(position.sample, other_sample, sample_abs) * polarity;
+                }
+
+                if other_err.is_sign_negative() {
+                    break quantizer.quantize(position.sample, other_sample, sample) * polarity;
+                }
+
+                position.index = other_index;
+                position.sample = other_sample;
+                position.error = other_err;
+            }
+        }
+    } else {
+        todo!("combo exponent and mantissa search")
     }
 }
 
