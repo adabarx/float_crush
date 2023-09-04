@@ -73,8 +73,9 @@ impl Default for FloatCrushParams {
             exponent_bias: FloatParam::new(
                 "exponent_bias",
                 1.,
-                FloatRange::Skewed { min: 0.5, max: 2., factor: 0.625 }
-            ),
+                FloatRange::Skewed { min: 0.5, max: 8., factor: 0.25 }
+            )
+            .with_value_to_string(formatters::v2s_f32_rounded(2)),
 
             mantissa: FloatParam::new(
                 "mantissa",
@@ -222,7 +223,8 @@ impl Plugin for FloatCrush {
                             } else {
                                 // normalize mantissa to 0.0 - 1.0
                                 let m = m as f32 / mantissa as f32;
-                                let position = (mantissa_bias_invert.powf(m) - 1.) / (mantissa_bias_invert - 1.);
+                                let position =
+                                    (mantissa_bias_invert.powf(m) - 1.) / (mantissa_bias_invert - 1.);
                                 position * curr_frac
                             };
 
