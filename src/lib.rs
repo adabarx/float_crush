@@ -356,31 +356,19 @@ fn search_and_quantize(
         return quantizer.quantize(1., 0., sample);
     }
 
-    let mut position = Position { sample: 1., index: 0, range: 0.5, error: 1. - sample_abs };
     if exponent < 1 {
-        let step_size = 1. / mantissa as f32;
-        loop {
-            let other_index = mantissa * position.range as i32;
-            let other_sample = step_size * other_index as f32;
-            let other_err = other_sample - sample_abs;
-
-            if other_sample == sample_abs { break sample; }
-
-            if position.index - other_index <= 1 {
-                break quantizer.quantize(position.sample, other_sample, sample_abs) * polarity;
-            }
-
-            if other_err.is_sign_negative() {
-                position.range *= 0.5;
-            } else {
-                position.index = other_index;
-                position.sample = other_sample;
-                position.error = other_err;
-            }
-        }
+        search_mantissa(mantissa, m_bias, (1., 0.), sample, quantizer)
     } else {
-        if e_bias > std::f32::consts::SQRT_2 {
-            // linear search will be faster
+        let mut position = Position {
+            sample: 1.,
+            index: 0,
+            range: 0.5,
+            error: 1. - sample_abs
+        };
+
+        if e_bias > 0.618 { // approx golden ratio
+            // linear search will be faster because we're searching the amplitude range
+            // logaritmically
             loop {
                 let other_index = position.index + 1;
                 let other_sample = 1. / (e_bias * 2.).powi(other_index);
@@ -389,12 +377,13 @@ fn search_and_quantize(
                 if other_sample == sample_abs { break sample; }
 
                 if other_err.is_sign_negative() {
-                    if mantissa == 0 {
-                        break quantizer.quantize(position.sample, other_sample, sample) * polarity;
-                    }
-                    let step_size = position.range / mantissa as f32;
-
-
+                    break search_mantissa(
+                        mantissa,
+                        m_bias,
+                        (position.sample, other_sample),
+                        sample,
+                        quantizer
+                    );
                 }
 
                 position.index = other_index;
@@ -402,6 +391,8 @@ fn search_and_quantize(
                 position.error = other_err;
             }
         } else {
+            // binary search becomes useful again once the exponential bias flattens things out a
+            // bit
             loop {
                 let other_index = position.index * position.range as i32;
                 let other_sample = 1. / (e_bias * 2.).powi(other_index);
@@ -410,19 +401,88 @@ fn search_and_quantize(
                 if other_sample == sample_abs { break sample; }
 
                 if position.index - other_index <= 1 {
-                    break quantizer.quantize(position.sample, other_sample, sample_abs) * polarity;
+                    break search_mantissa(
+                        mantissa,
+                        m_bias,
+                        (position.sample, other_sample),
+                        sample,
+                        quantizer
+                    );
                 }
 
                 if other_err.is_sign_negative() {
-                    break quantizer.quantize(position.sample, other_sample, sample) * polarity;
+                    position.range *= 0.5;
+                } else {
+                    position.index = other_index;
+                    position.sample = other_sample;
+                    position.error = other_err;
                 }
-
-                position.index = other_index;
-                position.sample = other_sample;
-                position.error = other_err;
             }
         }
     }
+}
+
+fn search_mantissa(mantissa: i32, m_bias: f32, range: (f32, f32), sample: f32, quantizer: Quantizator) -> f32 {
+    let polarity = if sample.is_sign_positive() { 1_f32 } else { -1_f32 };
+    let sample_abs = sample.abs();
+
+    let high_end = if range.0 > range.1 { range.0 } else { range.1 };
+    let low_end  = if range.0 < range.1 { range.0 } else { range.1 };
+
+    if mantissa == 0 {
+        return quantizer
+            .quantize(high_end, low_end, sample.abs())
+            * polarity;
+    }
+
+    let sample_range = high_end - low_end;
+
+    let mut position = Position {
+        sample: high_end,
+        index: 0,
+        range: 0.5,
+        error: high_end - sample_abs
+    };
+
+    loop {
+        let other_index = mantissa * position.range as i32;
+
+        let step = high_end - if m_bias == 1. {
+            let step_size = sample_range / mantissa as f32;
+            step_size * other_index as f32
+        } else {
+            // normalize mantissa to 0.0 - 1.0
+            let m = other_index as f32 / mantissa as f32;
+            let position =
+                (m_bias.powf(m) - 1.) / (m_bias - 1.);
+            position * sample_range
+
+        };
+
+        let other_sample = step * other_index as f32;
+        let other_err = other_sample - sample_abs;
+
+        if other_sample == sample_abs { break sample; }
+
+        if position.index - other_index <= 1 {
+            break quantizer.quantize(position.sample, other_sample, sample_abs) * polarity;
+        }
+
+        if other_index == mantissa {
+            // the only way we should trigger this is if the sample is between 0 and the lowest bit
+            // depth
+            break quantizer.quantize(other_sample, 0., sample);
+        }
+
+        if other_err.is_sign_negative() {
+            position.range *= 0.5;
+        } else {
+            position.index = other_index;
+            position.sample = other_sample;
+            position.error = other_err;
+        }
+    }
+
 }
 
 impl ClapPlugin for FloatCrush {
