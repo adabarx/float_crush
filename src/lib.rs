@@ -78,9 +78,12 @@ impl Default for FloatCrushParams {
             exponent_bias: FloatParam::new(
                 "exponent_bias",
                 1.,
-                FloatRange::Skewed { min: 0.5, max: 8., factor: 0.25 }
-            )
-            .with_value_to_string(formatters::v2s_f32_rounded(2)),
+                FloatRange::Skewed {
+                    min: 0.500000059604644775390625,
+                    max: 8.,
+                    factor: 0.25
+                }
+            ),
 
             mantissa: FloatParam::new(
                 "mantissa",
@@ -185,12 +188,12 @@ impl Plugin for FloatCrush {
         _context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         for channel_samples in buffer.iter_samples() {
+            let round_type = self.params.round.value();
             let exponent = 2_f32.powf(self.params.exponent.value()).round() as i32;
-            let exponent_bias = self.params.exponent_bias.value();
+            let e_bias = self.params.exponent_bias.value();
 
             let mantissa = 2_f32.powf(self.params.mantissa.value()).round() as i32;
-            let mantissa_bias = 50000_f32.powf(self.params.mantissa_bias.value());
-            let mantissa_bias_invert = 50000_f32.powf(self.params.mantissa_bias.value() * -1.);
+            let m_bias = 50000_f32.powf(self.params.mantissa_bias.value());
 
             let drive = self.params.drive.value();
             let dry_gain = self.params.dry.value();
@@ -198,99 +201,74 @@ impl Plugin for FloatCrush {
             
             for sample in channel_samples {
                 let polarity = if sample.is_sign_positive() { 1_f32 } else { -1_f32 };
-                let s_dry = sample.clone();
+                let sample_dry = sample.clone();
 
                 // apply input drive
                 *sample *= drive;
 
-                let s_abs = sample.abs();
-                let mut s_wet = sample.clone();
+                let sample_abs = sample.abs();
 
-                if s_abs >= 1. {
-                    let clipped = 1. * polarity;
-                    *sample = (s_dry * dry_gain) + (clipped * wet_gain);
+                if sample_abs >= 1. {
+                    *sample = (sample_dry * dry_gain) + (polarity * wet_gain);
                     continue;
                 }
 
-                'search_loop: for e in 0..exponent {
-                    let curr_frac = 1_f32 / (exponent_bias * 2.).powi(e);
-                    let curr_err  = curr_frac - s_abs;
-                    if curr_err.is_sign_negative() {
-                        let mut prev_step = curr_frac;
-                        let mut prev_err = curr_err;
-                        for m in 0..mantissa {
-
-                            let curr_step = curr_frac + if m == 0 {
-                                0.
-                            } else if mantissa_bias == 1. {
-                                let m_step = curr_frac / mantissa as f32;
-                                m_step * m as f32
-                            } else {
-                                // normalize mantissa to 0.0 - 1.0
-                                let m = m as f32 / mantissa as f32;
-                                let position =
-                                    (mantissa_bias_invert.powf(m) - 1.) / (mantissa_bias_invert - 1.);
-                                position * curr_frac
-                            };
-
-                            let curr_err = curr_step - s_abs;
-                            if curr_err.is_sign_positive() {
-                                if curr_err.abs() < prev_err.abs() {
-                                    s_wet = curr_step * polarity;
-                                } else {
-                                    s_wet = prev_step * polarity;
-                                }
-                                break 'search_loop;
-                            } else if m == mantissa {
-                                s_wet = curr_step * polarity;
-                                break 'search_loop;
-                            }
-                            prev_step = curr_step;
-                            prev_err = curr_err;
-                        }
-                        s_wet = curr_frac * polarity;
-                        break 'search_loop;
-                    } else if e == exponent {
-                        s_wet = 0.;
-                        // just gonna shamelessly copy this logic
-                        let m_step = curr_frac / mantissa as f32;
-                        let mut prev_step = curr_frac;
-                        let mut prev_err = curr_err;
-
-                        for m in 0..mantissa {
-                            let curr_step = curr_frac - if m == 0 {
-                                0.
-                            } else if mantissa_bias == 1. {
-                                let m_step = curr_frac / mantissa as f32;
-                                m_step * m as f32
-                            } else {
-                                // normalize mantissa to 0.0 - 1.0
-                                let m = m as f32 / mantissa as f32;
-                                let position = (mantissa_bias.powf(m) - 1.) / (mantissa_bias - 1.);
-                                position * curr_frac
-                            };
-
-                            let curr_err  = curr_step - s_abs;
-                            if curr_err.is_sign_negative() {
-                                if curr_err.abs() < prev_err.abs() {
-                                    s_wet = curr_step * polarity;
-                                } else {
-                                    s_wet = prev_step * polarity;
-                                }
-                                break 'search_loop;
-                            } else if m == mantissa {
-                                s_wet = 0.;
-                                break 'search_loop;
-                            }
-                            prev_step = curr_step;
-                            prev_err = curr_err;
-                        }
-                        break 'search_loop;
-                    }
+                let quantizer = Quantizator::from_i32(round_type);
+                
+                if exponent < 1 && mantissa < 1 {
+                    let sample_wet = quantizer.quantize(1., 0., sample_abs) * polarity;
+                    *sample = (sample_dry * dry_gain) + (sample_wet * wet_gain);
+                    continue;
                 }
+                
+                let sample_wet = {
 
-                let _ = search_and_quantize(*sample, exponent, exponent_bias, mantissa, mantissa_bias, 0);
-                *sample = (s_dry * dry_gain) + (s_wet * wet_gain)
+                    if exponent < 1 {
+                        let result = search_mantissa(
+                            mantissa,
+                            m_bias,
+                            (1., 0.),
+                            sample_abs,
+                            quantizer
+                        );
+                        result * polarity
+                    } else {
+                        let mut position = Position {
+                            sample: 1.,
+                            index: 0,
+                            range: 0.5,
+                            error: 1. - sample_abs
+                        };
+
+                        loop {
+                            let other_index = position.index + (exponent as f32 * position.range) as i32;
+                            let other_sample = 1. / (e_bias * 2.).powi(other_index);
+                            let other_err = other_sample - sample_abs;
+
+                            if other_sample == sample_abs { break *sample; }
+
+                            if position.index - other_index <= 1 {
+                                let result = search_mantissa(
+                                    mantissa,
+                                    m_bias,
+                                    (position.sample, other_sample),
+                                    sample_abs,
+                                    quantizer
+                                );
+                                break result * polarity;
+                            }
+
+                            if other_err.is_sign_negative() {
+                                position.range *= 0.5;
+                            } else {
+                                position.index = other_index;
+                                position.sample = other_sample;
+                                position.error = other_err;
+                            }
+                        }
+                    }
+                };
+                *sample = (sample_dry * dry_gain) + (sample_wet * wet_gain)
             }
         }
 
@@ -336,91 +314,6 @@ struct Position {
     error: f32,
 }
 
-fn search_and_quantize(
-    sample: f32,
-    exponent: i32,
-    e_bias: f32,
-    mantissa: i32,
-    m_bias: f32,
-    round_type: i32
-) -> f32 {
-    let polarity = if sample.is_sign_positive() { 1_f32 } else { -1_f32 };
-    let sample_abs = sample.abs();
-    let quantizer = Quantizator::from_i32(round_type);
-
-    if sample >= 1. {
-        return polarity;
-    }
-
-    if exponent < 1 && mantissa < 1 {
-        return quantizer.quantize(1., 0., sample);
-    }
-
-    if exponent < 1 {
-        search_mantissa(mantissa, m_bias, (1., 0.), sample, quantizer)
-    } else {
-        let mut position = Position {
-            sample: 1.,
-            index: 0,
-            range: 0.5,
-            error: 1. - sample_abs
-        };
-
-        if e_bias > 0.618 { // approx golden ratio
-            // linear search will be faster because we're searching the amplitude range
-            // logaritmically
-            loop {
-                let other_index = position.index + 1;
-                let other_sample = 1. / (e_bias * 2.).powi(other_index);
-                let other_err = other_sample - sample_abs;
-
-                if other_sample == sample_abs { break sample; }
-
-                if other_err.is_sign_negative() {
-                    break search_mantissa(
-                        mantissa,
-                        m_bias,
-                        (position.sample, other_sample),
-                        sample,
-                        quantizer
-                    );
-                }
-
-                position.index = other_index;
-                position.sample = other_sample;
-                position.error = other_err;
-            }
-        } else {
-            // binary search becomes useful again once the exponential bias flattens things out a
-            // bit
-            loop {
-                let other_index = position.index * position.range as i32;
-                let other_sample = 1. / (e_bias * 2.).powi(other_index);
-                let other_err = other_sample - sample_abs;
-
-                if other_sample == sample_abs { break sample; }
-
-                if position.index - other_index <= 1 {
-                    break search_mantissa(
-                        mantissa,
-                        m_bias,
-                        (position.sample, other_sample),
-                        sample,
-                        quantizer
-                    );
-                }
-
-                if other_err.is_sign_negative() {
-                    position.range *= 0.5;
-                } else {
-                    position.index = other_index;
-                    position.sample = other_sample;
-                    position.error = other_err;
-                }
-            }
-        }
-    }
-}
 
 fn search_mantissa(mantissa: i32, m_bias: f32, range: (f32, f32), sample: f32, quantizer: Quantizator) -> f32 {
     let polarity = if sample.is_sign_positive() { 1_f32 } else { -1_f32 };
@@ -445,7 +338,7 @@ fn search_mantissa(mantissa: i32, m_bias: f32, range: (f32, f32), sample: f32, q
     };
 
     loop {
-        let other_index = mantissa * position.range as i32;
+        let other_index = position.index + (mantissa as f32 * position.range) as i32;
 
         let step = high_end - if m_bias == 1. {
             let step_size = sample_range / mantissa as f32;
