@@ -16,8 +16,8 @@ struct FloatCrushParams {
     /// these IDs remain constant, you can rename and reorder these fields as you wish. The
     /// parameters are exposed to the host in the same order they were defined. In this case, this
     /// gain parameter is stored as linear gain while the values are displayed in decibels.
-    #[id = "drive"]
-    pub drive: FloatParam,
+    #[id = "input gain"]
+    pub input_gain: FloatParam,
 
     #[id = "round"]
     pub round: IntParam,
@@ -25,13 +25,13 @@ struct FloatCrushParams {
     #[id = "exponent"]
     pub exponent: FloatParam,
 
-    #[id = "exponent_bias"]
+    #[id = "exponent bias"]
     pub exponent_bias: FloatParam,
 
     #[id = "mantissa"]
     pub mantissa: FloatParam,
 
-    #[id = "mantissa_bias"]
+    #[id = "mantissa bias"]
     pub mantissa_bias: FloatParam,
 
     #[id = "dry"]
@@ -52,13 +52,13 @@ impl Default for FloatCrush {
 impl Default for FloatCrushParams {
     fn default() -> Self {
         Self {
-            drive: FloatParam::new(
+            input_gain: FloatParam::new(
                 "drive",
                 1.,
                 FloatRange::Skewed {
-                    min: util::db_to_gain(-12.),
-                    max: util::db_to_gain(36.),
-                    factor: FloatRange::gain_skew_factor(-12., 36.)
+                    min: util::db_to_gain(-30.),
+                    max: util::db_to_gain(30.),
+                    factor: FloatRange::gain_skew_factor(-30., 30.)
                 }
             )
             .with_unit(" db")
@@ -188,85 +188,89 @@ impl Plugin for FloatCrush {
         _context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         for channel_samples in buffer.iter_samples() {
-            let round_type = self.params.round.value();
             let exponent = 2_f32.powf(self.params.exponent.value()).round() as i32;
             let e_bias = self.params.exponent_bias.value();
 
             let mantissa = 2_f32.powf(self.params.mantissa.value()).round() as i32;
             let m_bias = 50000_f32.powf(self.params.mantissa_bias.value());
 
-            let drive = self.params.drive.value();
+            let input_gain = self.params.input_gain.value();
             let dry_gain = self.params.dry.value();
             let wet_gain = self.params.wet.value();
+
+            let quantizer = Quantizator::from_i32(self.params.round.value());
             
             for sample in channel_samples {
-                let polarity = if sample.is_sign_positive() { 1_f32 } else { -1_f32 };
                 let sample_dry = sample.clone();
+                let sample_wet = sample.clone();
 
                 // apply input drive
-                *sample *= drive;
+                let sample_wet = sample_wet * input_gain;
 
-                let sample_abs = sample.abs();
-
-                if sample_abs >= 1. {
-                    *sample = (sample_dry * dry_gain) + (polarity * wet_gain);
+                if sample_wet.abs() >= 1. {
+                    // clip sample, mix w/ dry according to dry/wet settings
+                    *sample = mix_dry_wet(
+                        sample_dry,
+                        dry_gain,
+                        sample_wet / sample_wet.abs(),
+                        wet_gain
+                    );
                     continue;
                 }
 
-                let quantizer = Quantizator::from_i32(round_type);
-                
                 if exponent < 1 && mantissa < 1 {
-                    let sample_wet = quantizer.quantize(1., 0., sample_abs) * polarity;
-                    *sample = (sample_dry * dry_gain) + (sample_wet * wet_gain);
+                    // no search necessary, quantize to zero or one
+                    let polarity = if sample_wet.is_sign_positive() { 1_f32 } else { -1_f32 };
+                    let sample_wet = quantizer.quantize_abs(1., 0., sample_wet.abs()) * polarity;
+                    *sample = mix_dry_wet(sample_dry, dry_gain, sample_wet, wet_gain);
                     continue;
                 }
                 
                 let sample_wet = {
-
-                    if exponent < 1 {
-                        let result = search_mantissa(
+                    // if exponent == 0 {
+                        search_mantissa(
                             mantissa,
                             m_bias,
                             (1., 0.),
-                            sample_abs,
+                            sample_wet,
                             quantizer
-                        );
-                        result * polarity
-                    } else {
-                        let mut position = Position {
-                            sample: 1.,
-                            index: 0,
-                            range: 0.5,
-                            error: 1. - sample_abs
-                        };
-
-                        loop {
-                            let other_index = position.index + (exponent as f32 * position.range) as i32;
-                            let other_sample = 1. / (e_bias * 2.).powi(other_index);
-                            let other_err = other_sample - sample_abs;
-
-                            if other_sample == sample_abs { break *sample; }
-
-                            if position.index - other_index <= 1 {
-                                let result = search_mantissa(
-                                    mantissa,
-                                    m_bias,
-                                    (position.sample, other_sample),
-                                    sample_abs,
-                                    quantizer
-                                );
-                                break result * polarity;
-                            }
-
-                            if other_err.is_sign_negative() {
-                                position.range *= 0.5;
-                            } else {
-                                position.index = other_index;
-                                position.sample = other_sample;
-                                position.error = other_err;
-                            }
-                        }
-                    }
+                        )
+                    // } else {
+                    //     let sample_abs = sample_wet.abs();
+                    //     let mut position = Position {
+                    //         sample: 1.,
+                    //         index: 0,
+                    //         range: 0.5,
+                    //         error: 1. - sample_abs,
+                    //     };
+                    //
+                    //     loop {
+                    //         let other_index = position.index + (exponent as f32 * position.range).round() as i32;
+                    //         let other_sample = 1. / (e_bias * 2.).powi(other_index);
+                    //         let other_err = other_sample - sample_abs;
+                    //
+                    //         // if a sample is already in a quantized position, return it
+                    //         if other_sample == sample_abs { break sample_wet; }
+                    //
+                    //         if position.index - other_index <= 1 {
+                    //             break search_mantissa(
+                    //                 mantissa,
+                    //                 m_bias,
+                    //                 (position.sample, other_sample),
+                    //                 sample_wet,
+                    //                 quantizer
+                    //             )
+                    //         }
+                    //
+                    //         if other_err.is_sign_negative() {
+                    //             position.range *= 0.5;
+                    //         } else {
+                    //             position.index = other_index;
+                    //             position.sample = other_sample;
+                    //             position.error = other_err;
+                    //         }
+                    //     }
+                    // }
                 };
                 *sample = (sample_dry * dry_gain) + (sample_wet * wet_gain)
             }
@@ -276,6 +280,11 @@ impl Plugin for FloatCrush {
     }
 }
 
+fn mix_dry_wet(dry: f32, dry_gain: f32, wet: f32, wet_gain: f32) -> f32 {
+    (dry * dry_gain) + (wet * wet_gain)
+}
+
+#[derive(Clone, Copy)]
  enum Quantizator {
     RoundUp,
     Nearest,
@@ -293,7 +302,7 @@ impl Quantizator {
         }
     }
 
-    pub fn quantize(&self, upper_bound: f32, lower_bound: f32, sample: f32) -> f32 {
+    pub fn quantize_abs(&self, upper_bound: f32, lower_bound: f32, sample: f32) -> f32 {
         match self {
             Self::Nearest => {
                 let midpoint = (upper_bound + lower_bound) / 2.;
@@ -307,11 +316,25 @@ impl Quantizator {
     }
 }
 
-struct Position {
-    sample: f32,
-    index: i32,
-    range: f32,
-    error: f32,
+struct IndexRange {
+    start: i32,
+    length: i32,
+}
+
+impl IndexRange {
+    pub fn center(&self) -> i32 {
+        let rv = self.start as f32 + (self.length as f32/ 2.);
+        rv.floor() as i32
+    }
+
+    pub fn cull(&mut self, curr_index: i32, lower: bool) {
+        if lower {
+            self.length = self.length - curr_index;
+        } else {
+            self.start = curr_index;
+            self.length = self.length - curr_index;
+        }
+    }
 }
 
 
@@ -322,60 +345,60 @@ fn search_mantissa(mantissa: i32, m_bias: f32, range: (f32, f32), sample: f32, q
     let high_end = if range.0 > range.1 { range.0 } else { range.1 };
     let low_end  = if range.0 < range.1 { range.0 } else { range.1 };
 
+    if sample_abs < low_end {
+        return quantizer.quantize_abs(low_end, 0., sample_abs) * polarity;
+    }
+
     if mantissa == 0 {
         return quantizer
-            .quantize(high_end, low_end, sample.abs())
+            .quantize_abs(high_end, low_end, sample.abs())
             * polarity;
     }
 
     let sample_range = high_end - low_end;
-
-    let mut position = Position {
-        sample: high_end,
-        index: 0,
-        range: 0.5,
-        error: high_end - sample_abs
+    let mut index_range = IndexRange {
+        start: 0,
+        length: mantissa,
     };
 
+
     loop {
-        let other_index = position.index + (mantissa as f32 * position.range) as i32;
+        // found the two closest values
+        if index_range.length <= 2 {
+            let index_one = index_range.start;
+            let index_two = index_range.start + 1;
 
-        let step = high_end - if m_bias == 1. {
-            let step_size = sample_range / mantissa as f32;
-            step_size * other_index as f32
-        } else {
-            // normalize mantissa to 0.0 - 1.0
-            let m = other_index as f32 / mantissa as f32;
-            let position =
-                (m_bias.powf(m) - 1.) / (m_bias - 1.);
-            position * sample_range
+            let sample_one = find_m_sample(high_end, sample_range, mantissa, index_one, m_bias);
+            let sample_two = find_m_sample(high_end, sample_range, mantissa, index_two, m_bias);
 
-        };
-
-        let other_sample = step * other_index as f32;
-        let other_err = other_sample - sample_abs;
-
-        if other_sample == sample_abs { break sample; }
-
-        if position.index - other_index <= 1 {
-            break quantizer.quantize(position.sample, other_sample, sample_abs) * polarity;
+            break quantizer.quantize_abs(sample_one, sample_two, sample_abs) * polarity;
         }
 
-        if other_index == mantissa {
-            // the only way we should trigger this is if the sample is between 0 and the lowest bit
-            // depth
-            break quantizer.quantize(other_sample, 0., sample);
-        }
+        let curr_index = index_range.center();
 
-        if other_err.is_sign_negative() {
-            position.range *= 0.5;
-        } else {
-            position.index = other_index;
-            position.sample = other_sample;
-            position.error = other_err;
-        }
+        let curr_sample = find_m_sample(high_end, sample_range, mantissa, curr_index, m_bias);
+
+        // found the value
+        if curr_sample == sample_abs { break sample; }
+
+        let curr_err = curr_sample - sample_abs;
+
+        index_range.cull(curr_index, curr_sample.is_sign_positive());
     }
 
+}
+
+fn find_m_sample(high_end: f32, sample_range: f32, mantissa: i32, index: i32, m_bias: f32) -> f32 {
+    high_end - if m_bias == 1. {
+        let step_size = sample_range / mantissa as f32;
+        step_size * index as f32
+    } else {
+        // normalize mantissa to 0.0 - 1.0
+        let m = index as f32 / mantissa as f32;
+        let position =
+            (m_bias.powf(m) - 1.) / (m_bias - 1.);
+        position * sample_range
+    }
 }
 
 impl ClapPlugin for FloatCrush {
