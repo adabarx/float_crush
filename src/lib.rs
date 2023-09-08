@@ -426,63 +426,26 @@ nih_export_vst3!(FloatCrush);
 mod tests {
     use super::*;
 
-    #[test]
-    fn linear_mantissa_zero() {
-        let quantizer = Quantizator::from_i32(0);
-        let sample_one = search_mantissa(0, 1., (1., 0.), 0.6, quantizer);
-        let sample_two = search_mantissa(0, 1., (1., 0.), -0.6, quantizer);
+    macro_rules! linear_mantissa {
+        ($bits:expr, $sample:expr, $expected:expr) => {
+            paste::item! {
+                #[test]
+                fn [ < linear_mantissa_ $bits > ] () {
+                    let quantizer = Quantizator::from_i32(0);
+                    let sample_one = search_mantissa($bits, 1., (1., 0.), $sample, quantizer);
 
-        assert_eq!(1., sample_one);
-        assert_eq!(-1., sample_two);
+                    assert_eq!(sample_one, $expected);
+                }
+            }
+        };
     }
 
-    #[test]
-    fn linear_mantissa_one() {
-        let quantizer = Quantizator::from_i32(0);
-        let sample_one = search_mantissa(1, 1., (1., 0.), 0.6, quantizer);
-        let sample_two = search_mantissa(1, 1., (1., 0.), -0.6, quantizer);
-
-        assert_eq!(1., sample_one);
-        assert_eq!(-1., sample_two);
-    }
-
-    #[test]
-    fn linear_mantissa_two() {
-        let quantizer = Quantizator::from_i32(0);
-        let sample_one = search_mantissa(2, 1., (1., 0.), 0.6, quantizer);
-        let sample_two = search_mantissa(2, 1., (1., 0.), -0.6, quantizer);
-
-        assert_eq!(0.5, sample_one);
-        assert_eq!(-0.5, sample_two);
-    }
-
-    #[test]
-    fn linear_mantissa_four() {
-        let quantizer = Quantizator::from_i32(0);
-        let sample_one = search_mantissa(4, 1., (1., 0.), 0.6, quantizer);
-        let sample_two = search_mantissa(4, 1., (1., 0.), -0.6, quantizer);
-
-        assert_eq!(0.5, sample_one);
-        assert_eq!(-0.5, sample_two);
-    }
-
-    #[test]
-    fn linear_mantissa_eight() {
-        let quantizer = Quantizator::from_i32(0);
-        let sample_one = search_mantissa(8, 1., (1., 0.), 0.6, quantizer);
-        let sample_two = search_mantissa(8, 1., (1., 0.), -0.6, quantizer);
-
-        assert_eq!(0.5, sample_one);
-        assert_eq!(-0.5, sample_two);
-    }
-
-    #[test]
-    fn linear_mantissa_sixteen() {
-        let quantizer = Quantizator::from_i32(0);
-        let sample_one = search_mantissa(16, 1., (1., 0.), 0.6, quantizer);
-        let sample_two = search_mantissa(16, 1., (1., 0.), -0.6, quantizer);
-
-        assert_eq!(0.5, sample_one);
-        assert_eq!(-0.5, sample_two);
-    }
+    linear_mantissa!(0, 0.6, 1.);
+    linear_mantissa!(1, 0.6, 1.);
+    linear_mantissa!(2, 0.6, 0.625);
+    linear_mantissa!(4, 0.6, 0.625);
+    linear_mantissa!(8, 0.6, 0.625);
+    linear_mantissa!(16, 0.6, 0.625);
+    linear_mantissa!(32, 0.6, 0.625);
+    linear_mantissa!(64, 0.6, 0.625);
 }
