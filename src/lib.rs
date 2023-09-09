@@ -340,7 +340,7 @@ impl SearchRange {
         (self.length as f32 / 2.).floor() as u32
     }
 
-    pub fn cull(&mut self) -> CullResult {
+    pub fn cull(&mut self, bias: f32) -> CullResult {
         let c_sample = self.center_sample();
         if self.length == 1 {
             let start = find_m_sample(
@@ -348,14 +348,14 @@ impl SearchRange {
                 self.range.distance(),
                 self.mantissa,
                 self.start,
-                1.
+                bias,
             );
             let end = find_m_sample(
                 self.range.high,
                 self.range.distance(),
                 self.mantissa,
                 self.start + 1,
-                1.
+                bias,
             );
             CullResult::TwoLeft(start, end, self.sample)
         } else if c_sample == self.sample {
@@ -424,7 +424,7 @@ fn search_mantissa(mantissa: u32, m_bias: f32, range: SampleRange, sample: f32, 
 
 
     loop {
-        let result = search_range.cull();
+        let result = search_range.cull(m_bias);
         match result {
             CullResult::ExactMatch(sample) => break sample,
             CullResult::TwoLeft(upper, lower, sample) => 
