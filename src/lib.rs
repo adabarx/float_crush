@@ -316,28 +316,26 @@ impl Quantizator {
     }
 }
 
-struct IndexRange {
-    start: i32,
-    length: i32,
+struct SearchRange {
+    start: u32,
+    length: u32,
+    mantissa: u32,
+    range: SampleRange,
+    sample: f32,
 }
 
-impl IndexRange {
-    pub fn center(&self) -> i32 {
-        let rv = self.start as f32 + (self.length as f32/ 2.);
-        rv.floor() as i32
+impl SearchRange {
+    pub fn center(&self) -> u32 {
+        let rv = self.start as f32 + (self.length as f32 / 2.);
+        rv.floor() as u32
     }
 
-    pub fn cull(&self, lower: bool) -> IndexRange {
+    pub fn cull(&mut self, lower: bool) {
         if lower {
-            IndexRange {
-                start: self.start,
-                length: self.length - self.center(),
-            }
+            self.start = self.center();
+            self.length = self.length - self.center();
         } else {
-            IndexRange {
-                start: self.center(),
-                length: self.length - self.center(),
-            }
+            self.length = self.length - self.center();
         }
     }
 }
@@ -358,7 +356,7 @@ impl SampleRange {
     }
 }
 
-fn search_mantissa(mantissa: i32, m_bias: f32, range: SampleRange, sample: f32, quantizer: Quantizator) -> f32 {
+fn search_mantissa(mantissa: u32, m_bias: f32, range: SampleRange, sample: f32, quantizer: Quantizator) -> f32 {
     let sample_abs = sample.abs();
     let polarity = sample / sample_abs;
 
@@ -367,22 +365,23 @@ fn search_mantissa(mantissa: i32, m_bias: f32, range: SampleRange, sample: f32, 
     }
 
     if mantissa == 0 {
-        return quantizer
-            .quantize_abs(range.high, range.low, sample.abs())
-            * polarity;
+        return quantizer.quantize_abs(range.high, range.low, sample_abs) * polarity;
     }
 
-    let index_range = IndexRange {
+    let mut search_range = SearchRange {
         start: 0,
         length: mantissa,
+        mantissa,
+        range,
+        sample,
     };
 
 
     loop {
         // found the two closest values
-        if index_range.length <= 2 {
-            let index_one = index_range.start;
-            let index_two = index_range.start + 1;
+        if search_range.length <= 3 {
+            let index_one = search_range.start;
+            let index_two = search_range.start + 1;
 
             let sample_one = find_m_sample(range.high, range.distance(), mantissa, index_one, m_bias);
             let sample_two = find_m_sample(range.high, range.distance(), mantissa, index_two, m_bias);
@@ -390,7 +389,7 @@ fn search_mantissa(mantissa: i32, m_bias: f32, range: SampleRange, sample: f32, 
             break quantizer.quantize_abs(sample_one, sample_two, sample_abs) * polarity;
         }
 
-        let curr_index = index_range.center();
+        let curr_index = search_range.center();
 
         let curr_sample = find_m_sample(range.high, range.distance(), mantissa, curr_index, m_bias);
 
@@ -399,20 +398,19 @@ fn search_mantissa(mantissa: i32, m_bias: f32, range: SampleRange, sample: f32, 
 
         let curr_err = curr_sample - sample_abs;
 
-        index_range.cull(curr_sample.is_sign_positive());
+        search_range.cull(curr_err.is_sign_positive());
     }
 
 }
 
-fn find_m_sample(high_end: f32, sample_range: f32, mantissa: i32, index: i32, m_bias: f32) -> f32 {
+fn find_m_sample(high_end: f32, sample_range: f32, mantissa: u32, index: u32, m_bias: f32) -> f32 {
     high_end - if m_bias == 1. {
         let step_size = sample_range / mantissa as f32;
         step_size * index as f32
     } else {
         // normalize mantissa to 0.0 - 1.0
         let m = index as f32 / mantissa as f32;
-        let position =
-            (m_bias.powf(m) - 1.) / (m_bias - 1.);
+        let position = (m_bias.powf(m) - 1.) / (m_bias - 1.);
         position * sample_range
     }
 }
@@ -459,12 +457,24 @@ mod tests {
 
     linear_mantissa!(0, 0.6, 1.);
     linear_mantissa!(1, 0.6, 1.);
-    // linear_mantissa!(2, 0.6, 0.625);
-    // linear_mantissa!(4, 0.6, 0.625);
-    // linear_mantissa!(8, 0.6, 0.625);
-    // linear_mantissa!(16, 0.6, 0.625);
-    // linear_mantissa!(32, 0.6, 0.625);
-    // linear_mantissa!(64, 0.6, 0.625);
+    linear_mantissa!(2, 0.6, 0.5);
+    linear_mantissa!(4, 0.6, 0.625);
+    linear_mantissa!(8, 0.6, 0.625);
+    linear_mantissa!(16, 0.6, 0.625);
+    linear_mantissa!(32, 0.6, 0.625);
+    linear_mantissa!(64, 0.6, 0.625);
+
+    #[test]
+    fn test_find_m_sample() {
+        let s = find_m_sample(1., 1., 10, 0, 1.);
+        assert_eq!(s, 1.);
+        let s = find_m_sample(1., 1., 10, 1, 1.);
+        assert_eq!(s, 0.9);
+        let s = find_m_sample(1., 1., 10, 2, 1.);
+        assert_eq!(s, 0.8);
+        let s = find_m_sample(1., 1., 4, 3, 1.);
+        assert_eq!(s, 0.25);
+    }
 
     #[test]
     fn sample_range() {
@@ -477,30 +487,30 @@ mod tests {
 
     #[test]
     fn index_range() {
-        let t = IndexRange { start: 0, length: 10 };
+        let t = SearchRange { start: 0, length: 10 };
 
         assert_eq!(t.center(), 5);
 
         let cull_lower = t.cull(true);
         let cull_higher = t.cull(false);
 
-        assert_eq!(cull_lower.start, 0);
+        assert_eq!(cull_lower.start, 5);
         assert_eq!(cull_lower.length, 5);
 
-        assert_eq!(cull_higher.start, 5);
+        assert_eq!(cull_higher.start, 0);
         assert_eq!(cull_higher.length, 5);
 
-        let t = IndexRange { start: 0, length: 11 };
+        let t = SearchRange { start: 0, length: 11 };
 
         assert_eq!(t.center(), 5);
 
         let cull_lower = t.cull(true);
         let cull_higher = t.cull(false);
 
-        assert_eq!(cull_lower.start, 0);
+        assert_eq!(cull_lower.start, 5);
         assert_eq!(cull_lower.length, 6);
 
-        assert_eq!(cull_higher.start, 5);
+        assert_eq!(cull_higher.start, 0);
         assert_eq!(cull_higher.length, 6);
     }
 }
