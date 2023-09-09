@@ -188,10 +188,10 @@ impl Plugin for FloatCrush {
         _context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         for channel_samples in buffer.iter_samples() {
-            let exponent = 2_f32.powf(self.params.exponent.value()).round() as i32;
+            let exponent = 2_f32.powf(self.params.exponent.value()).round() as u32;
             let e_bias = self.params.exponent_bias.value();
 
-            let mantissa = 2_f32.powf(self.params.mantissa.value()).round() as i32;
+            let mantissa = 2_f32.powf(self.params.mantissa.value()).round() as u32;
             let m_bias = 50000_f32.powf(self.params.mantissa_bias.value());
 
             let input_gain = self.params.input_gain.value();
@@ -325,21 +325,69 @@ struct SearchRange {
 }
 
 impl SearchRange {
-    pub fn center(&self) -> u32 {
-        let rv = self.start as f32 + (self.length as f32 / 2.);
-        rv.floor() as u32
+    pub fn new(mantissa: u32, range: SampleRange, sample: f32) -> anyhow::Result<Self> {
+        if !range.in_range(sample) { anyhow::bail!("not in range") }
+        else {
+            Ok(Self { start: 0, length: mantissa, mantissa, range, sample })
+        }
     }
 
-    pub fn cull(&mut self, lower: bool) {
-        if lower {
+    pub fn center(&self) -> u32 {
+        self.start + self.half_length()
+    }
+
+    fn half_length(&self) -> u32 {
+        (self.length as f32 / 2.).floor() as u32
+    }
+
+    pub fn cull(&mut self) -> CullResult {
+        let c_sample = self.center_sample();
+        if self.length == 1 {
+            let start = find_m_sample(
+                self.range.high,
+                self.range.distance(),
+                self.mantissa,
+                self.start,
+                1.
+            );
+            let end = find_m_sample(
+                self.range.high,
+                self.range.distance(),
+                self.mantissa,
+                self.start + 1,
+                1.
+            );
+            CullResult::TwoLeft(start, end, self.sample)
+        } else if c_sample == self.sample {
+            CullResult::ExactMatch(self.sample)
+        } else if c_sample > self.sample {
             self.start = self.center();
-            self.length = self.length - self.center();
+            self.length = self.length - self.half_length();
+            CullResult::CutHalf
         } else {
-            self.length = self.length - self.center();
+            self.length = self.length - self.half_length();
+            CullResult::CutHalf
         }
+    }
+
+    pub fn center_sample(&self) -> f32 {
+        find_m_sample(
+            self.range.high,
+            self.range.distance(),
+            self.mantissa,
+            self.center(),
+            1.
+        )
     }
 }
 
+enum CullResult {
+    CutHalf,
+    TwoLeft(f32, f32, f32),
+    ExactMatch(f32)
+}
+
+#[derive(Clone, Copy)]
 struct SampleRange {
     high: f32, 
     low: f32
@@ -353,6 +401,10 @@ impl SampleRange {
 
     pub fn distance (&self) -> f32 {
         self.high - self.low
+    }
+
+    pub fn in_range(&self, sample: f32) -> bool {
+        sample >= self.low && sample <= self.high
     }
 }
 
@@ -368,37 +420,17 @@ fn search_mantissa(mantissa: u32, m_bias: f32, range: SampleRange, sample: f32, 
         return quantizer.quantize_abs(range.high, range.low, sample_abs) * polarity;
     }
 
-    let mut search_range = SearchRange {
-        start: 0,
-        length: mantissa,
-        mantissa,
-        range,
-        sample,
-    };
+    let mut search_range = SearchRange::new(mantissa, range, sample).unwrap();
 
 
     loop {
-        // found the two closest values
-        if search_range.length <= 3 {
-            let index_one = search_range.start;
-            let index_two = search_range.start + 1;
-
-            let sample_one = find_m_sample(range.high, range.distance(), mantissa, index_one, m_bias);
-            let sample_two = find_m_sample(range.high, range.distance(), mantissa, index_two, m_bias);
-
-            break quantizer.quantize_abs(sample_one, sample_two, sample_abs) * polarity;
+        let result = search_range.cull();
+        match result {
+            CullResult::ExactMatch(sample) => break sample,
+            CullResult::TwoLeft(upper, lower, sample) => 
+                break quantizer.quantize_abs(upper, lower, sample),
+            CullResult::CutHalf => (),
         }
-
-        let curr_index = search_range.center();
-
-        let curr_sample = find_m_sample(range.high, range.distance(), mantissa, curr_index, m_bias);
-
-        // found the value
-        if curr_sample == sample_abs { break sample; }
-
-        let curr_err = curr_sample - sample_abs;
-
-        search_range.cull(curr_err.is_sign_positive());
     }
 
 }
@@ -458,11 +490,13 @@ mod tests {
     linear_mantissa!(0, 0.6, 1.);
     linear_mantissa!(1, 0.6, 1.);
     linear_mantissa!(2, 0.6, 0.5);
-    linear_mantissa!(4, 0.6, 0.625);
+    linear_mantissa!(4, 0.6, 0.5);
     linear_mantissa!(8, 0.6, 0.625);
     linear_mantissa!(16, 0.6, 0.625);
-    linear_mantissa!(32, 0.6, 0.625);
-    linear_mantissa!(64, 0.6, 0.625);
+    linear_mantissa!(32, 0.6, 0.59375);
+    linear_mantissa!(64, 0.6, 0.59375);
+    linear_mantissa!(128, 0.6, 0.59375);
+    linear_mantissa!(256, 0.6, 0.59375);
 
     #[test]
     fn test_find_m_sample() {
@@ -483,34 +517,5 @@ mod tests {
         assert_eq!(t.high, 5.);
         assert_eq!(t.low, 4.);
         assert_eq!(t.distance(), 1.);
-    }
-
-    #[test]
-    fn index_range() {
-        let t = SearchRange { start: 0, length: 10 };
-
-        assert_eq!(t.center(), 5);
-
-        let cull_lower = t.cull(true);
-        let cull_higher = t.cull(false);
-
-        assert_eq!(cull_lower.start, 5);
-        assert_eq!(cull_lower.length, 5);
-
-        assert_eq!(cull_higher.start, 0);
-        assert_eq!(cull_higher.length, 5);
-
-        let t = SearchRange { start: 0, length: 11 };
-
-        assert_eq!(t.center(), 5);
-
-        let cull_lower = t.cull(true);
-        let cull_higher = t.cull(false);
-
-        assert_eq!(cull_lower.start, 5);
-        assert_eq!(cull_lower.length, 6);
-
-        assert_eq!(cull_higher.start, 0);
-        assert_eq!(cull_higher.length, 6);
     }
 }
