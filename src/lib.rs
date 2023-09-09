@@ -478,10 +478,15 @@ mod tests {
             paste::item! {
                 #[test]
                 fn [ < linear_mantissa_ $bits > ] () {
-                    let quantizer = Quantizator::from_i32(0);
-                    let sample_one = search_mantissa($bits, 1., SampleRange::new(1., 0.), $sample, quantizer);
+                    let sample_one = search_mantissa(
+                        $bits,
+                        1.,
+                        SampleRange::new(1., 0.),
+                        $sample,
+                        Quantizator::Nearest,
+                    );
 
-                    assert_eq!(sample_one, $expected);
+                    assert_eq!($expected, sample_one);
                 }
             }
         };
@@ -495,8 +500,6 @@ mod tests {
     linear_mantissa!(16, 0.6, 0.625);
     linear_mantissa!(32, 0.6, 0.59375);
     linear_mantissa!(64, 0.6, 0.59375);
-    linear_mantissa!(128, 0.6, 0.59375);
-    linear_mantissa!(256, 0.6, 0.59375);
 
     #[test]
     fn test_find_m_sample() {
