@@ -220,7 +220,7 @@ impl Plugin for FloatCrush {
 
                 if exponent < 1 && mantissa < 1 {
                     // no search necessary, quantize to zero or one
-                    let polarity = if sample_wet.is_sign_positive() { 1_f32 } else { -1_f32 };
+                    let polarity = sample_wet / sample_wet.abs();
                     let sample_wet = quantizer.quantize_abs(1., 0., sample_wet.abs()) * polarity;
                     *sample = mix_dry_wet(sample_dry, dry_gain, sample_wet, wet_gain);
                     continue;
@@ -325,10 +325,10 @@ struct SearchRange {
 }
 
 impl SearchRange {
-    pub fn new(mantissa: u32, range: SampleRange, sample: f32) -> anyhow::Result<Self> {
-        if !range.in_range(sample) { anyhow::bail!("not in range") }
+    pub fn new(mantissa: u32, range: SampleRange, sample_abs: f32) -> anyhow::Result<Self> {
+        if !range.in_range(sample_abs) { anyhow::bail!("not in range") }
         else {
-            Ok(Self { start: 0, length: mantissa, mantissa, range, sample })
+            Ok(Self { start: 0, length: mantissa, mantissa, range, sample: sample_abs })
         }
     }
 
@@ -420,7 +420,7 @@ fn search_mantissa(mantissa: u32, m_bias: f32, range: SampleRange, sample: f32, 
         return quantizer.quantize_abs(range.high, range.low, sample_abs) * polarity;
     }
 
-    let mut search_range = SearchRange::new(mantissa, range, sample).unwrap();
+    let mut search_range = SearchRange::new(mantissa, range, sample_abs).unwrap();
 
 
     loop {
@@ -428,7 +428,7 @@ fn search_mantissa(mantissa: u32, m_bias: f32, range: SampleRange, sample: f32, 
         match result {
             CullResult::ExactMatch(sample) => break sample,
             CullResult::TwoLeft(upper, lower, sample) => 
-                break quantizer.quantize_abs(upper, lower, sample),
+                break quantizer.quantize_abs(upper, lower, sample) * polarity,
             CullResult::CutHalf => (),
         }
     }
