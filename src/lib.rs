@@ -1,4 +1,4 @@
-#![allow(unused_variables)]
+#![allow(unused_variables, dead_code)]
 use nih_plug::prelude::*;
 use std::sync::Arc;
 
@@ -228,7 +228,7 @@ impl Plugin for FloatCrush {
                 }
                 
                 let sample_wet = {
-                    // if exponent == 0 {
+                    if exponent == 0 {
                         search_mantissa(
                             mantissa,
                             m_bias,
@@ -236,42 +236,19 @@ impl Plugin for FloatCrush {
                             sample_wet,
                             quantizer
                         )
-                    // } else {
-                    //     let sample_abs = sample_wet.abs();
-                    //     let mut position = Position {
-                    //         sample: 1.,
-                    //         index: 0,
-                    //         range: 0.5,
-                    //         error: 1. - sample_abs,
-                    //     };
-                    //
-                    //     loop {
-                    //         let other_index = position.index + (exponent as f32 * position.range).round() as i32;
-                    //         let other_sample = 1. / (e_bias * 2.).powi(other_index);
-                    //         let other_err = other_sample - sample_abs;
-                    //
-                    //         // if a sample is already in a quantized position, return it
-                    //         if other_sample == sample_abs { break sample_wet; }
-                    //
-                    //         if position.index - other_index <= 1 {
-                    //             break search_mantissa(
-                    //                 mantissa,
-                    //                 m_bias,
-                    //                 (position.sample, other_sample),
-                    //                 sample_wet,
-                    //                 quantizer
-                    //             )
-                    //         }
-                    //
-                    //         if other_err.is_sign_negative() {
-                    //             position.range *= 0.5;
-                    //         } else {
-                    //             position.index = other_index;
-                    //             position.sample = other_sample;
-                    //             position.error = other_err;
-                    //         }
-                    //     }
-                    // }
+                    } else {
+                        let sample_abs = sample_wet.abs();
+                        let mut search_range = SearchRange {
+                            start: 0,
+                            length: exponent,
+                            search_type: SearchType::Exponent(exponent, e_bias),
+                            range: SampleRange::new(1., 0.),
+                            sample: sample_abs
+                        };
+
+                        loop {
+                        }
+                    }
                 };
                 *sample = (sample_dry * dry_gain) + (sample_wet * wet_gain)
             }
@@ -327,19 +304,64 @@ impl Quantizator {
     }
 }
 
+enum SearchType {
+    // u32 is the mantissa/exponent length
+    // f32 is the bias
+    Mantissa(u32, f32),
+    Exponent(u32, f32),
+}
+
+impl SearchType {
+    pub fn length(&self) -> u32 {
+        match self {
+            &Self::Mantissa(length, _) => length,
+            &Self::Exponent(length, _) => length,
+        }
+    }
+
+    pub fn get_sample(&self, index: u32, range: SampleRange) -> f32 {
+        match self {
+            &Self::Mantissa(length, bias) => {
+                range.high - if bias == 1. {
+                    let step_size = range.distance() / length as f32;
+                    step_size * index as f32
+                } else {
+                    // normalize mantissa to 0.0 - 1.0
+                    let m = index as f32 / length as f32;
+                    let position = (bias.powf(m) - 1.) / (bias - 1.);
+                    position * range.distance()
+                }
+            },
+            &Self::Exponent(_, bias) => {
+                (bias * 2.).powi(index as i32 * -1)
+            },
+        }
+    }
+}
+
 struct SearchRange {
     start: u32,
     length: u32,
-    mantissa: u32,
+    search_type: SearchType,
     range: SampleRange,
     sample: f32,
 }
 
 impl SearchRange {
-    pub fn new(mantissa: u32, range: SampleRange, sample_abs: f32) -> anyhow::Result<Self> {
+    pub fn new(
+        search_type: SearchType,
+        range: SampleRange,
+        sample_abs: f32
+    ) -> anyhow::Result<Self> {
         if !range.in_range(sample_abs) { anyhow::bail!("not in range") }
         else {
-            Ok(Self { start: 0, length: mantissa, mantissa, range, sample: sample_abs })
+            Ok(Self {
+                start: 0,
+                length: search_type.length(),
+                search_type,
+                range,
+                sample: sample_abs
+            })
         }
     }
 
@@ -351,46 +373,84 @@ impl SearchRange {
         (self.length as f32 / 2.).floor() as u32
     }
 
-    pub fn cull(&mut self, bias: f32) -> CullResult {
-        let c_sample = self.center_sample(bias);
-        if self.length == 1 {
-            let start = find_m_sample(
-                self.range.high,
-                self.range.distance(),
-                self.mantissa,
-                self.start,
-                bias,
-            );
-            let end = find_m_sample(
-                self.range.high,
-                self.range.distance(),
-                self.mantissa,
-                self.start + 1,
-                bias,
-            );
-            CullResult::TwoLeft(start, end, self.sample)
-        } else if c_sample == self.sample {
-            CullResult::ExactMatch(self.sample)
-        } else if c_sample > self.sample {
-            self.start = self.center();
-            self.length = self.length - self.half_length();
-            CullResult::CutHalf
-        } else {
-            self.length = self.length - self.half_length();
-            CullResult::CutHalf
+    pub fn cull(&mut self) -> CullResult {
+        match self.search_type {
+            SearchType::Mantissa(length, bias) => {
+                let c_sample = self.center_sample(bias);
+                if self.length == 1 {
+                    let start = find_m_sample(
+                        self.range.high,
+                        self.range.distance(),
+                        self.search_type.length(),
+                        self.start,
+                        bias,
+                    );
+                    let end = find_m_sample(
+                        self.range.high,
+                        self.range.distance(),
+                        self.search_type.length(),
+                        self.start + 1,
+                        bias,
+                    );
+                    CullResult::TwoLeft(start, end, self.sample)
+                } else if c_sample == self.sample {
+                    CullResult::ExactMatch(self.sample)
+                } else if c_sample > self.sample {
+                    self.start = self.center();
+                    self.length = self.length - self.half_length();
+                    CullResult::CutHalf
+                } else {
+                    self.length = self.length - self.half_length();
+                    CullResult::CutHalf
+                }
+            },
+            SearchType::Exponent(length, bias) => {
+                let c_sample = self.center_sample(bias);
+                if self.length == 1 {
+                    let start = find_m_sample(
+                        self.range.high,
+                        self.range.distance(),
+                        self.search_type.length(),
+                        self.start,
+                        bias,
+                    );
+                    let end = find_m_sample(
+                        self.range.high,
+                        self.range.distance(),
+                        self.search_type.length(),
+                        self.start + 1,
+                        bias,
+                    );
+                    CullResult::TwoLeft(start, end, self.sample)
+                } else if c_sample == self.sample {
+                    CullResult::ExactMatch(self.sample)
+                } else if c_sample > self.sample {
+                    self.start = self.center();
+                    self.length = self.length - self.half_length();
+                    CullResult::CutHalf
+                } else {
+                    self.length = self.length - self.half_length();
+                    CullResult::CutHalf
+                }
+            },
         }
     }
-
     pub fn center_sample(&self, bias: f32) -> f32 {
-        find_m_sample(
-            self.range.high,
-            self.range.distance(),
-            self.mantissa,
-            self.center(),
-            bias,
-        )
+        match self.search_type {
+            SearchType::Mantissa(length, bias) => {
+                find_m_sample(
+                    self.range.high,
+                    self.range.distance(),
+                    self.search_type.length(),
+                    self.center(),
+                    bias,
+                )
+            },
+            SearchType::Exponent(length, bias) => { 0. }
+        }
     }
 }
+
 
 enum CullResult {
     CutHalf,
@@ -431,11 +491,13 @@ fn search_mantissa(mantissa: u32, m_bias: f32, range: SampleRange, sample: f32, 
         return quantizer.quantize_abs(range.high, range.low, sample_abs) * polarity;
     }
 
-    let mut search_range = SearchRange::new(mantissa, range, sample_abs).unwrap();
+    let search_type = SearchType::Mantissa(mantissa, m_bias);
+
+    let mut search_range = SearchRange::new(search_type, range, sample_abs).unwrap();
 
 
     loop {
-        match search_range.cull(m_bias) {
+        match search_range.cull() {
             CullResult::ExactMatch(sample) => break sample * polarity,
             CullResult::TwoLeft(upper, lower, sample) => 
                 break quantizer.quantize_abs(upper, lower, sample) * polarity,
