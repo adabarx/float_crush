@@ -212,7 +212,7 @@ impl Plugin for FloatCrush {
                     *sample = mix_dry_wet(
                         sample_dry,
                         dry_gain,
-                        sample_wet / sample_wet.abs(),
+                        sample_wet.polarity(),
                         wet_gain
                     );
                     continue;
@@ -220,8 +220,9 @@ impl Plugin for FloatCrush {
 
                 if exponent < 1 && mantissa < 1 {
                     // no search necessary, quantize to zero or one
-                    let polarity = sample_wet / sample_wet.abs();
-                    let sample_wet = quantizer.quantize_abs(1., 0., sample_wet.abs()) * polarity;
+                    let sample_wet = quantizer.quantize_abs(1., 0., sample_wet.abs())
+                        * sample_wet.polarity();
+
                     *sample = mix_dry_wet(sample_dry, dry_gain, sample_wet, wet_gain);
                     continue;
                 }
@@ -277,6 +278,16 @@ impl Plugin for FloatCrush {
         }
 
         ProcessStatus::Normal
+    }
+}
+
+trait Polarity {
+    fn polarity(&self) -> f32;
+}
+
+impl Polarity for f32 {
+    fn polarity(&self) -> f32 {
+        if self.is_sign_positive() { 1_f32 } else { -1_f32 }
     }
 }
 
@@ -341,7 +352,7 @@ impl SearchRange {
     }
 
     pub fn cull(&mut self, bias: f32) -> CullResult {
-        let c_sample = self.center_sample();
+        let c_sample = self.center_sample(bias);
         if self.length == 1 {
             let start = find_m_sample(
                 self.range.high,
@@ -370,13 +381,13 @@ impl SearchRange {
         }
     }
 
-    pub fn center_sample(&self) -> f32 {
+    pub fn center_sample(&self, bias: f32) -> f32 {
         find_m_sample(
             self.range.high,
             self.range.distance(),
             self.mantissa,
             self.center(),
-            1.
+            bias,
         )
     }
 }
@@ -410,7 +421,7 @@ impl SampleRange {
 
 fn search_mantissa(mantissa: u32, m_bias: f32, range: SampleRange, sample: f32, quantizer: Quantizator) -> f32 {
     let sample_abs = sample.abs();
-    let polarity = sample / sample_abs;
+    let polarity = sample.polarity();
 
     if sample_abs < range.low {
         return quantizer.quantize_abs(range.low, 0., sample_abs) * polarity;
@@ -424,9 +435,8 @@ fn search_mantissa(mantissa: u32, m_bias: f32, range: SampleRange, sample: f32, 
 
 
     loop {
-        let result = search_range.cull(m_bias);
-        match result {
-            CullResult::ExactMatch(sample) => break sample,
+        match search_range.cull(m_bias) {
+            CullResult::ExactMatch(sample) => break sample * polarity,
             CullResult::TwoLeft(upper, lower, sample) => 
                 break quantizer.quantize_abs(upper, lower, sample) * polarity,
             CullResult::CutHalf => (),
