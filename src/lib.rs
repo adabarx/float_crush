@@ -53,7 +53,7 @@ impl Default for FloatCrushParams {
     fn default() -> Self {
         Self {
             input_gain: FloatParam::new(
-                "drive",
+                "input",
                 1.,
                 FloatRange::Skewed {
                     min: util::db_to_gain(-30.),
@@ -70,7 +70,7 @@ impl Default for FloatCrushParams {
             exponent: FloatParam::new(
                 "exponent",
                 8.,
-                FloatRange::Skewed { min: 0., max: 8., factor: 1.5 }
+                FloatRange::Skewed { min: 0., max: 12., factor: 1.6666667 }
             )
             .with_unit(" bits")
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
@@ -88,7 +88,7 @@ impl Default for FloatCrushParams {
             mantissa: FloatParam::new(
                 "mantissa",
                 12.,
-                FloatRange::Skewed { min: 0., max: 12., factor: 1.25 }
+                FloatRange::Skewed { min: 0., max: 12., factor: 1.6666667 }
             )
             .with_unit(" bits")
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
@@ -188,10 +188,13 @@ impl Plugin for FloatCrush {
         _context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         for channel_samples in buffer.iter_samples() {
-            let exponent = 2_f32.powf(self.params.exponent.value()).round() as u32;
+            let e_param = self.params.exponent.value();
+            let m_param = self.params.mantissa.value();
+
+            let exponent = 2_f32.powf(e_param).floor() as u32;
             let e_bias = self.params.exponent_bias.value();
 
-            let mantissa = 2_f32.powf(self.params.mantissa.value()).round() as u32;
+            let mantissa = 2_f32.powf(m_param).floor() as u32;
             let m_bias = 50000_f32.powf(self.params.mantissa_bias.value());
 
             let input_gain = self.params.input_gain.value();
@@ -218,7 +221,7 @@ impl Plugin for FloatCrush {
                     continue;
                 }
 
-                if exponent < 1 && mantissa < 1 {
+                if e_param == 0. && m_param == 0. {
                     // no search necessary, quantize to zero or one
                     let sample_wet = quantizer.quantize_abs(1., 0., sample_wet.abs())
                         * sample_wet.polarity();
@@ -226,27 +229,51 @@ impl Plugin for FloatCrush {
                     *sample = mix_dry_wet(sample_dry, dry_gain, sample_wet, wet_gain);
                     continue;
                 }
+
+                if e_param == 0. {
+                    *sample = search_mantissa(
+                        mantissa,
+                        m_bias,
+                        SampleRange::new(1., 0.),
+                        sample_wet,
+                        quantizer
+                    );
+                    continue;
+                }
                 
                 let sample_wet = {
-                    if exponent == 0 {
-                        search_mantissa(
-                            mantissa,
-                            m_bias,
-                            SampleRange::new(1., 0.),
-                            sample_wet,
-                            quantizer
-                        )
-                    } else {
-                        let sample_abs = sample_wet.abs();
-                        let mut search_range = SearchRange {
-                            start: 0,
-                            length: exponent,
-                            search_type: SearchType::Exponent(exponent, e_bias),
-                            range: SampleRange::new(1., 0.),
-                            sample: sample_abs
-                        };
+                    let sample_abs = sample_wet.abs();
+                    let polarity = sample_wet.polarity();
+                    let mut search_range = SearchRange {
+                        start: 0,
+                        length: exponent,
+                        search_type: SearchType::Exponent(exponent, e_bias),
+                        range: SampleRange::new(1., 0.),
+                        sample: sample_abs
+                    };
 
-                        loop {
+                    loop {
+                        match search_range.cull() {
+                            CullResult::ExactMatch(sample) => break sample * polarity,
+                            CullResult::TwoLeft(upper, lower, sample_abs) => {
+                                if lower > sample_abs {
+                                    break search_mantissa(
+                                        mantissa,
+                                        m_bias,
+                                        SampleRange::new(lower, 0.),
+                                        sample_wet,
+                                        quantizer
+                                    );
+                                }
+                                break search_mantissa(
+                                    mantissa,
+                                    m_bias,
+                                    SampleRange::new(upper, lower),
+                                    sample_wet,
+                                    quantizer
+                                );
+                            },
+                            CullResult::CutHalf => (),
                         }
                     }
                 };
@@ -256,6 +283,34 @@ impl Plugin for FloatCrush {
 
         ProcessStatus::Normal
     }
+}
+
+fn search_mantissa(mantissa: u32, m_bias: f32, range: SampleRange, sample: f32, quantizer: Quantizator) -> f32 {
+    let sample_abs = sample.abs();
+    let polarity = sample.polarity();
+
+    if sample_abs < range.low {
+        return quantizer.quantize_abs(range.low, 0., sample_abs) * polarity;
+    }
+
+    if mantissa == 0 {
+        return quantizer.quantize_abs(range.high, range.low, sample_abs) * polarity;
+    }
+
+    let search_type = SearchType::Mantissa(mantissa, m_bias);
+
+    let mut search_range = SearchRange::new(search_type, range, sample_abs).unwrap();
+
+
+    loop {
+        match search_range.cull() {
+            CullResult::ExactMatch(sample) => break sample * polarity,
+            CullResult::TwoLeft(upper, lower, sample) =>
+                break quantizer.quantize_abs(upper, lower, sample) * polarity,
+            CullResult::CutHalf => (),
+        }
+    }
+
 }
 
 trait Polarity {
@@ -374,80 +429,25 @@ impl SearchRange {
     }
 
     pub fn cull(&mut self) -> CullResult {
-        match self.search_type {
-            SearchType::Mantissa(length, bias) => {
-                let c_sample = self.center_sample(bias);
-                if self.length == 1 {
-                    let start = find_m_sample(
-                        self.range.high,
-                        self.range.distance(),
-                        self.search_type.length(),
-                        self.start,
-                        bias,
-                    );
-                    let end = find_m_sample(
-                        self.range.high,
-                        self.range.distance(),
-                        self.search_type.length(),
-                        self.start + 1,
-                        bias,
-                    );
-                    CullResult::TwoLeft(start, end, self.sample)
-                } else if c_sample == self.sample {
-                    CullResult::ExactMatch(self.sample)
-                } else if c_sample > self.sample {
-                    self.start = self.center();
-                    self.length = self.length - self.half_length();
-                    CullResult::CutHalf
-                } else {
-                    self.length = self.length - self.half_length();
-                    CullResult::CutHalf
-                }
-            },
-            SearchType::Exponent(length, bias) => {
-                let c_sample = self.center_sample(bias);
-                if self.length == 1 {
-                    let start = find_m_sample(
-                        self.range.high,
-                        self.range.distance(),
-                        self.search_type.length(),
-                        self.start,
-                        bias,
-                    );
-                    let end = find_m_sample(
-                        self.range.high,
-                        self.range.distance(),
-                        self.search_type.length(),
-                        self.start + 1,
-                        bias,
-                    );
-                    CullResult::TwoLeft(start, end, self.sample)
-                } else if c_sample == self.sample {
-                    CullResult::ExactMatch(self.sample)
-                } else if c_sample > self.sample {
-                    self.start = self.center();
-                    self.length = self.length - self.half_length();
-                    CullResult::CutHalf
-                } else {
-                    self.length = self.length - self.half_length();
-                    CullResult::CutHalf
-                }
-            },
+        let c_sample = self.center_sample();
+        if self.length == 1 {
+            let start = self.search_type.get_sample(self.start, self.range);
+            let end = self.search_type.get_sample(self.start + 1, self.range);
+            CullResult::TwoLeft(start, end, self.sample)
+        } else if c_sample == self.sample {
+            CullResult::ExactMatch(self.sample)
+        } else if c_sample > self.sample {
+            self.start = self.center();
+            self.length = self.length - self.half_length();
+            CullResult::CutHalf
+        } else {
+            self.length = self.length - self.half_length();
+            CullResult::CutHalf
         }
     }
-    pub fn center_sample(&self, bias: f32) -> f32 {
-        match self.search_type {
-            SearchType::Mantissa(length, bias) => {
-                find_m_sample(
-                    self.range.high,
-                    self.range.distance(),
-                    self.search_type.length(),
-                    self.center(),
-                    bias,
-                )
-            },
-            SearchType::Exponent(length, bias) => { 0. }
-        }
+
+    pub fn center_sample(&self) -> f32 {
+        self.search_type.get_sample(self.center(), self.range)
     }
 }
 
@@ -479,33 +479,6 @@ impl SampleRange {
     }
 }
 
-fn search_mantissa(mantissa: u32, m_bias: f32, range: SampleRange, sample: f32, quantizer: Quantizator) -> f32 {
-    let sample_abs = sample.abs();
-    let polarity = sample.polarity();
-
-    if sample_abs < range.low {
-        return quantizer.quantize_abs(range.low, 0., sample_abs) * polarity;
-    }
-
-    if mantissa == 0 {
-        return quantizer.quantize_abs(range.high, range.low, sample_abs) * polarity;
-    }
-
-    let search_type = SearchType::Mantissa(mantissa, m_bias);
-
-    let mut search_range = SearchRange::new(search_type, range, sample_abs).unwrap();
-
-
-    loop {
-        match search_range.cull() {
-            CullResult::ExactMatch(sample) => break sample * polarity,
-            CullResult::TwoLeft(upper, lower, sample) => 
-                break quantizer.quantize_abs(upper, lower, sample) * polarity,
-            CullResult::CutHalf => (),
-        }
-    }
-
-}
 
 fn find_m_sample(high_end: f32, sample_range: f32, mantissa: u32, index: u32, m_bias: f32) -> f32 {
     high_end - if m_bias == 1. {
