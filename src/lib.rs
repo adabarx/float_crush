@@ -77,11 +77,11 @@ impl Default for FloatCrushParams {
             
             exponent_bias: FloatParam::new(
                 "exponent_bias",
-                1.,
+                2.,
                 FloatRange::Skewed {
-                    min: 0.500000059604644775390625,
+                    min: 1.,
                     max: 8.,
-                    factor: 0.25
+                    factor: 0.35
                 }
             ),
 
@@ -389,7 +389,7 @@ impl SearchType {
                 }
             },
             &Self::Exponent(_, bias) => {
-                (bias * 2.).powi(index as i32 * -1)
+                bias.powi(index as i32 * -1)
             },
         }
     }
