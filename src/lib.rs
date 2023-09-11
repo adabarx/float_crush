@@ -76,7 +76,7 @@ impl Default for FloatCrushParams {
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
             
             exponent_bias: FloatParam::new(
-                "exponent_bias",
+                "exponent base",
                 2.,
                 FloatRange::Skewed {
                     min: 1.,
