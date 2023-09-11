@@ -207,7 +207,7 @@ impl Plugin for FloatCrush {
                 let sample_dry = sample.clone();
                 let sample_wet = sample.clone();
 
-                // apply input drive
+                // apply input gain
                 let sample_wet = sample_wet * input_gain;
 
                 if sample_wet.abs() >= 1. {
@@ -240,7 +240,7 @@ impl Plugin for FloatCrush {
                     );
                     continue;
                 }
-                
+
                 let sample_wet = {
                     let sample_abs = sample_wet.abs();
                     let polarity = sample_wet.polarity();
@@ -254,7 +254,7 @@ impl Plugin for FloatCrush {
 
                     loop {
                         match search_range.cull() {
-                            CullResult::ExactMatch(sample) => break sample * polarity,
+                            CullResult::ExactMatch(sample_abs) => break sample_abs * polarity,
                             CullResult::TwoLeft(upper, lower, sample_abs) => {
                                 if lower > sample_abs {
                                     break search_mantissa(
@@ -304,9 +304,10 @@ fn search_mantissa(mantissa: u32, m_bias: f32, range: SampleRange, sample: f32, 
 
     loop {
         match search_range.cull() {
-            CullResult::ExactMatch(sample) => break sample * polarity,
-            CullResult::TwoLeft(upper, lower, sample) =>
-                break quantizer.quantize_abs(upper, lower, sample) * polarity,
+            CullResult::ExactMatch(sample_abs) =>
+                break sample_abs * polarity,
+            CullResult::TwoLeft(upper, lower, sample_abs) =>
+                break quantizer.quantize_abs(upper, lower, sample_abs) * polarity,
             CullResult::CutHalf => (),
         }
     }
@@ -460,7 +461,7 @@ enum CullResult {
 
 #[derive(Clone, Copy)]
 struct SampleRange {
-    high: f32, 
+    high: f32,
     low: f32
 }
 
@@ -499,7 +500,7 @@ impl ClapPlugin for FloatCrush {
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
 
     // Don't forget to change these features
-    const CLAP_FEATURES: &'static [ClapFeature] = 
+    const CLAP_FEATURES: &'static [ClapFeature] =
         &[ClapFeature::AudioEffect, ClapFeature::Distortion, ClapFeature::Glitch];
 }
 
