@@ -1,5 +1,7 @@
 #![allow(unused_variables, dead_code)]
 use nih_plug::prelude::*;
+use nih_plug_vizia::ViziaState;
+
 use std::sync::Arc;
 
 // This is a shortened version of the gain example with most comments removed, check out
@@ -16,6 +18,9 @@ struct FloatCrushParams {
     /// these IDs remain constant, you can rename and reorder these fields as you wish. The
     /// parameters are exposed to the host in the same order they were defined. In this case, this
     /// gain parameter is stored as linear gain while the values are displayed in decibels.
+    #[persist = "editor-state"]
+    editor_state: Arc<ViziaState>,
+
     #[id = "input gain"]
     pub input_gain: FloatParam,
 
@@ -52,6 +57,8 @@ impl Default for FloatCrush {
 impl Default for FloatCrushParams {
     fn default() -> Self {
         Self {
+            editor_state: ViziaState::new(|| (800, 600)),
+
             input_gain: FloatParam::new(
                 "input",
                 1.,
