@@ -6,6 +6,7 @@ use nih_plug_vizia::ViziaState;
 use std::sync::Arc;
 
 mod crush;
+mod ui;
 
 struct FloatCrush {
     params: Arc<FloatCrushParams>,
@@ -52,7 +53,7 @@ impl Default for FloatCrush {
 impl Default for FloatCrushParams {
     fn default() -> Self {
         Self {
-            editor_state: ViziaState::new(|| (800, 600)),
+            editor_state: ui::default_state(),
 
             input_gain: FloatParam::new(
                 "input",
@@ -153,6 +154,13 @@ impl Plugin for FloatCrush {
 
     fn params(&self) -> Arc<dyn Params> {
         self.params.clone()
+    }
+
+    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        ui::create(
+            self.params.clone(),
+            self.params.editor_state.clone()
+        )
     }
 
     fn process(
