@@ -581,6 +581,7 @@ dependencies = [
  "nih_plug",
  "nih_plug_vizia",
  "paste",
+ "vizia 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -1178,7 +1179,7 @@ dependencies = [
  "nih_plug",
  "nih_plug_assets",
  "serde",
- "vizia",
+ "vizia 0.1.0 (git+https://github.com/robbert-vdh/vizia.git?branch=patched)",
 ]
 
 [[package]]
@@ -2104,6 +2105,12 @@ name = "version_check"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
+
+[[package]]
+name = "vizia"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59e6388a13de3e9f5294b650e18c6442db499885d3a891c5d876cbc8597dcdc2"
 
 [[package]]
 name = "vizia"

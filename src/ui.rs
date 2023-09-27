@@ -6,6 +6,9 @@ use std::sync::Arc;
 
 use crate::FloatCrushParams;
 
+mod knob;
+use knob::{ParamKnob, ParamKnobStyle};
+
 #[derive(Lens)]
 struct Data {
     params: Arc<FloatCrushParams>
@@ -41,28 +44,28 @@ pub(crate) fn create(
                 .child_bottom(Pixels(0.0));
 
             Label::new(cx, "input_gain");
-            ParamSlider::new(cx, Data::params, |params| &params.input_gain);
+            ParamKnob::new(cx, ParamKnobStyle::FromLeft, Data::params, |params| &params.input_gain);
 
             Label::new(cx, "round");
-            ParamSlider::new(cx, Data::params, |params| &params.round);
+            ParamKnob::new(cx, ParamKnobStyle::Centered, Data::params, |params| &params.round);
 
             Label::new(cx, "exponent");
-            ParamSlider::new(cx, Data::params, |params| &params.exponent);
+            ParamKnob::new(cx, ParamKnobStyle::FromLeft, Data::params, |params| &params.exponent);
 
             Label::new(cx, "exponent_base");
-            ParamSlider::new(cx, Data::params, |params| &params.exponent_bias);
+            ParamKnob::new(cx, ParamKnobStyle::Centered, Data::params, |params| &params.exponent_bias);
 
             Label::new(cx, "mantissa");
-            ParamSlider::new(cx, Data::params, |params| &params.mantissa);
+            ParamKnob::new(cx, ParamKnobStyle::FromLeft, Data::params, |params| &params.mantissa);
 
             Label::new(cx, "mantissa_bias");
-            ParamSlider::new(cx, Data::params, |params| &params.mantissa_bias);
+            ParamKnob::new(cx, ParamKnobStyle::Centered, Data::params, |params| &params.mantissa_bias);
 
             Label::new(cx, "dry_gain");
-            ParamSlider::new(cx, Data::params, |params| &params.dry);
+            ParamKnob::new(cx, ParamKnobStyle::FromLeft, Data::params, |params| &params.dry);
 
             Label::new(cx, "wet_gain");
-            ParamSlider::new(cx, Data::params, |params| &params.wet);
+            ParamKnob::new(cx, ParamKnobStyle::FromLeft, Data::params, |params| &params.wet);
         })
         .row_between(Pixels(0.0))
         .child_left(Stretch(1.0))

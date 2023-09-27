@@ -1,3 +1,5 @@
+use crate::Round;
+
 
 
 pub fn search_mantissa(mantissa: u32, m_bias: f32, range: SampleRange, sample: f32, quantizer: Quantizator) -> f32 {
@@ -51,13 +53,11 @@ pub fn mix_dry_wet(dry: f32, dry_gain: f32, wet: f32, wet_gain: f32) -> f32 {
 }
 
 impl Quantizator {
-    pub fn from_i32(int: i32) -> Self {
-        if int == 0 {
-            Self::Nearest
-        } else if int > 0 {
-            Self::RoundUp
-        } else {
-            Self::RoundDown
+    pub fn new(param: Round) -> Self {
+        match param {
+            Round::Nearest => Self::Nearest,
+            Round::Up => Self::RoundUp,
+            Round::Down => Self::RoundDown,
         }
     }
 

@@ -21,7 +21,7 @@ struct FloatCrushParams {
     pub input_gain: FloatParam,
 
     #[id = "round"]
-    pub round: IntParam,
+    pub round: EnumParam<Round>,
 
     #[id = "exponent"]
     pub exponent: FloatParam,
@@ -40,6 +40,19 @@ struct FloatCrushParams {
 
     #[id = "wet"]
     pub wet: FloatParam,
+}
+
+#[derive(Enum, PartialEq, Eq)]
+pub enum Round {
+    Down,
+    Nearest,
+    Up,
+}
+
+impl Default for Round {
+    fn default() -> Self {
+        Self::Nearest
+    }
 }
 
 impl Default for FloatCrush {
@@ -68,7 +81,7 @@ impl Default for FloatCrushParams {
             .with_value_to_string(formatters::v2s_f32_gain_to_db(1))
             .with_string_to_value(formatters::s2v_f32_gain_to_db()),
 
-            round: IntParam::new("round", 0, IntRange::Linear { min: -1, max: 1 }),
+            round: EnumParam::new("round", Round::Nearest),
             
             exponent: FloatParam::new(
                 "exponent",
@@ -183,7 +196,7 @@ impl Plugin for FloatCrush {
             let dry_gain = self.params.dry.value();
             let wet_gain = self.params.wet.value();
 
-            let quantizer = Quantizator::from_i32(self.params.round.value());
+            let quantizer = Quantizator::new(self.params.round.value());
             
             for sample in channel_samples {
                 let sample_dry = sample.clone();
